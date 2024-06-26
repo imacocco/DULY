@@ -558,23 +558,24 @@ class DiffImbalance:
         #        periods=self.periods_B,
         #    )
 
-        #for batch_indices in all_batch_indices:
-        #    self.state, imb, error = self._train_step(
-        #        self.state,
-        #        self.data_A_rows[batch_indices],
-        #        self.data_A_columns,
-        #        self.ranks_B[batch_indices],
-        #        batch_indices,
-        #    )
-
         for batch_indices in all_batch_indices:
             self.state, imb, error = self._train_step(
                 self.state,
                 self.data_A_rows[batch_indices],
-                self.data_A_columns[batch_indices],
-                self.ranks_B[batch_indices][:,batch_indices].argsort().argsort(),
-                jnp.arange(batch_indices.shape[0]),
+                self.data_A_columns,
+                self.ranks_B[batch_indices],
+                batch_indices,
             )
+
+        # DON'T DELETE: ALTERNATIVE WAY FOR MINI-BATCH GD
+        #for batch_indices in all_batch_indices:
+        #    self.state, imb, error = self._train_step(
+        #        self.state,
+        #        self.data_A_rows[batch_indices],
+        #        self.data_A_columns[batch_indices],
+        #        self.ranks_B[batch_indices][:,batch_indices].argsort().argsort(),
+        #        jnp.arange(batch_indices.shape[0]),
+        #    )
 
         return self.state.params, imb, error
 
