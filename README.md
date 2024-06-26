@@ -123,7 +123,8 @@ pip install .
 
 The methods of the class ```DiffImbalance``` can be run on GPU, using a suitable installation of JAX on a GPU platform. The code has been tested with JAX v0.4.16 with CUDA 12, which can be installed with:
 
-```pip install --upgrade "jax[cuda12_pip]==0.4.16" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+```sh
+pip install --upgrade "jax[cuda12_pip]==0.4.16" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 ```
 
 For more information on the installation of the JAX library on GPUs see the official [repository](https://github.com/google/jax?tab=readme-ov-file#installation).
