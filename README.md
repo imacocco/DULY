@@ -95,7 +95,7 @@ overlap_labels = data.return_label_overlap(labels)
 The package is compatible with the Python versions 3.7, 3.8, 3.9, 3.10, 3.11, and 3.12. We currently only support Unix-based systems, including Linux and macOS. 
 For Windows machines, we suggest using the [Windows Subsystem for Linux (WSL)](https://en.wikipedia.org/wiki/Windows_Subsystem_for_Linux).
 
-The package requires `numpy`, `scipy` and `scikit-learn`, and `matplotlib` for the visualizations.
+The package requires `numpy`, `scipy`, `scikit-learn`, `cython` and `jax`, and `matplotlib` for the visualizations.
 
 The package contains Cython-generated C extensions that are automatically compiled during installation. 
 
@@ -120,6 +120,13 @@ cd DADApy
 python setup.py build_ext --inplace
 pip install .
 ```
+
+The methods of the class ```DiffImbalance``` can be run on GPU, using a suitable installation of JAX on a GPU platform. The code has been tested with JAX v0.4.16 with CUDA 12, which can be installed with:
+
+```pip install --upgrade "jax[cuda12_pip]==0.4.16" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+```
+
+For more information on the installation of the JAX library on GPUs see the official [repository](https://github.com/google/jax?tab=readme-ov-file#installation).
 
 # Citing DADApy
 

@@ -5,6 +5,7 @@ from .data import Data
 from .data_sets import DataSets
 from .density_advanced import DensityAdvanced
 from .density_estimation import DensityEstimation
+from .diff_imbalance import DiffImbalance
 from .feature_weighting import FeatureWeighting
 from .id_discrete import *
 from .id_estimation import IdEstimation
