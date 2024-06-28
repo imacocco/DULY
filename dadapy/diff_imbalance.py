@@ -212,9 +212,7 @@ class DiffImbalance:
         if init_params is not None:
             self.init_params = init_params
         else:
-            self.init_params = 0.1 * jax.random.normal(
-                subkey, shape=(self.nfeatures_A,)
-            )
+            self.init_params = 0.1 * jnp.ones(self.nfeatures_A)
         self.final_params = None
         self.optimizer_name = optimizer_name
         self.optimizer_hparams = {"init_value": learning_rate}
@@ -495,7 +493,6 @@ class DiffImbalance:
         params_output = jnp.empty(shape=(self.num_epochs + 1, self.nfeatures_A))
         imbs_output = jnp.empty(shape=(self.num_epochs + 1,))
         errors_output = jnp.empty(shape=(self.num_epochs + 1,))
-        params_output.at[0].set(self.init_params)
         batch_indices = jnp.arange(self.nrows // self.batches_per_epoch)
         imb_start, error_start = self._compute_diff_imbalance(
             self.init_params,
@@ -505,6 +502,7 @@ class DiffImbalance:
             0,
             batch_indices,
         )
+        params_output = params_output.at[0].set(self.init_params)
         imbs_output = imbs_output.at[0].set(imb_start)
         errors_output = errors_output.at[0].set(error_start)
 
