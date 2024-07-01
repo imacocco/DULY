@@ -7,7 +7,7 @@ license = {file = "LICENSE"}
 readme = "README.md"
 requires-python = ">=3.7"
 
-dependencies = ["numpy", "scipy", "scikit-learn", "matplotlib", "seaborn", "jax==0.4.16"]
+dependencies = ["numpy<2.0", "scipy", "scikit-learn", "matplotlib", "seaborn", "tqdm", "jax==0.4.30", "jaxlib==0.4.30", "flax==0.8.5"]
 
 [project.urls]
 homepage = "https://github.com/sissa-data-science/DADApy"
