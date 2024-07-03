@@ -131,6 +131,9 @@ class DiffImbalance:
             of points along the rows and the number points along the columns of distance and rank matrices, in two
             groups randomly sampled. The default is 1, which means that the two groups are constructed with
             n_points / 2 and n_points / 2 points.
+        num_points_rows (int): number of points sampled from the rows of rank and distance matrices. In case of large
+            datasets, choosing num_points_rows < n_points can significantly speed up the training. The default is
+            None, for which num_points_rows == n_points.
     """
 
     def __init__(
@@ -153,6 +156,7 @@ class DiffImbalance:
         learning_rate=1e-1,
         compute_error=False,
         ratio_rows_columns=1,
+        num_points_rows=None
     ):
         """Initialise the DiffImbalance class."""
         self.nfeatures_A = data_A.shape[1]
@@ -170,22 +174,31 @@ class DiffImbalance:
         self.data_B = data_B
 
         if compute_error:
+            assert num_points_rows is None, (
+                f"Error: if compute_error == True, the argument num_points_rows cannot be set."
+            )
             nrows = int(0.5 * ratio_rows_columns * data_A.shape[0])
             indices_rows = jax.random.choice(
                 self.key, jnp.arange(data_A.shape[0]), shape=(nrows,), replace=False
             )
             indices_columns = jnp.delete(jnp.arange(data_A.shape[0]), indices_rows)
-            self.data_A_rows = data_A[indices_rows]
-            self.data_A_columns = data_A[indices_columns]
-            self.data_B_rows = data_B[indices_rows]
-            self.data_B_columns = data_B[indices_columns]
             self.max_rank = indices_columns.shape[0]  # for correct normalization
+        elif num_points_rows is not None:
+            # decimate rows but not columns, and keep same indices in upper left square matrix
+            indices_rows = jax.random.choice(
+                self.key, jnp.arange(data_A.shape[0]), shape=(num_points_rows,), replace=False
+            )
+            indices_columns = jnp.delete(jnp.arange(data_A.shape[0]), indices_rows)
+            indices_columns = jnp.concatenate((indices_rows, indices_columns)) 
+            self.max_rank = indices_columns.shape[0] - 1  # for correct normalization
         else:
-            self.data_A_rows = +data_A
-            self.data_A_columns = +data_A
-            self.data_B_rows = +data_B
-            self.data_B_columns = +data_B
-            self.max_rank = data_A.shape[0] - 1  # for correct normalization
+            indices_rows = jnp.arange(data_A.shape[0])
+            indices_columns = +indices_rows
+            self.max_rank = indices_columns.shape[0] - 1  # for correct normalization
+        self.data_A_rows = data_A[indices_rows]
+        self.data_A_columns = data_A[indices_columns]
+        self.data_B_rows = data_B[indices_rows]
+        self.data_B_columns = data_B[indices_columns]
 
         self.nrows = self.data_A_rows.shape[0]
         self.periods_A = (
