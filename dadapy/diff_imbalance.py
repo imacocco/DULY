@@ -124,6 +124,9 @@ class DiffImbalance:
         optimizer_name (str): name of the optimizer, calling the Optax library. The possible choices are 'sgd'
             (default), 'adam' and 'adamw'. See https://optax.readthedocs.io/en/latest/api/optimizers.html for
             more.
+        learning_rate (float): value of the learning rate. The default is 1e-1.
+        learning_rate_decay (bool): whether to damp the learning rate to zero following a cosine decay schedule,
+            if True, or keep it to a constant value, if False. The default is True.
         compute_error (bool): whether to compute the standard Information Imbalance, if False (default), or to
             compute distances between points in two different groups and return the error associated to the DII
             during the training, if True
@@ -154,6 +157,7 @@ class DiffImbalance:
         init_params=None,
         optimizer_name="sgd",
         learning_rate=1e-1,
+        learning_rate_decay=True,
         compute_error=False,
         ratio_rows_columns=1,
         num_points_rows=None
@@ -228,7 +232,8 @@ class DiffImbalance:
             self.init_params = 0.1 * jnp.ones(self.nfeatures_A)
         self.final_params = None
         self.optimizer_name = optimizer_name
-        self.optimizer_hparams = {"init_value": learning_rate}
+        self.learning_rate = learning_rate
+        self.learning_rate_decay = learning_rate_decay
         self.compute_error = compute_error
         self.state = None
         self._distance_A = _compute_dist2_matrix_scaling  # TODO: assign other functions if other distances A are chosen
@@ -606,10 +611,16 @@ class DiffImbalance:
             opt_class = optax.sgd
         else:
             assert False, f'Unknown optimizer "{opt_class}"'
-        self.lr_schedule = optax.cosine_decay_schedule(
-            **self.optimizer_hparams,
-            decay_steps=self.num_epochs * self.batches_per_epoch,
-        )
+        # set the learning rate schedule (cosine decay or constant)
+        if self.learning_rate_decay:
+            self.lr_schedule = optax.cosine_decay_schedule(
+                init_value=self.learning_rate,
+                decay_steps=self.num_epochs * self.batches_per_epoch,
+            )
+        else:
+            self.lr_schedule = optax.constant_schedule(
+                value=self.learning_rate
+            )
         optimizer = opt_class(self.lr_schedule)
         # Initialize training state
         self.state = train_state.TrainState.create(
