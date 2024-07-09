@@ -19,11 +19,12 @@ The *diff_imbalance* module contains the *DiffImbalance* class, implemented with
 The only method supposed to be called by the user is 'train', which carries out the automatic optimization ot the 
 Differential Information as a function of the weights of the features in the first distance space. 
 The code can be runned on gpu using the command
-    jax.config.update('jax_platform_name', 'gpu') # 'cpu' or 'gpu
+    jax.config.update('jax_platform_name', 'gpu') # set 'cpu' or 'gpu'
 """
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from tqdm.auto import tqdm
 from flax.training import train_state
 import optax
@@ -137,6 +138,11 @@ class DiffImbalance:
         num_points_rows (int): number of points sampled from the rows of rank and distance matrices. In case of large
             datasets, choosing num_points_rows < n_points can significantly speed up the training. The default is
             None, for which num_points_rows == n_points.
+        discard_close_ind (int): defines the "close points" (following the same labelling order of data_A and
+            data_B, along axis=0) for which distances and ranks are not computed: for each point i, the distances 
+            d[i,i-discard_close_ind:i+discard_close_ind+1] are discarded. This option is only available with
+            batches_per_epoch=1, compute_error=False and num_points_rows=None. The default is None, for which no 
+            "close points" are discarded.
     """
 
     def __init__(
@@ -160,7 +166,8 @@ class DiffImbalance:
         learning_rate_decay=True,
         compute_error=False,
         ratio_rows_columns=1,
-        num_points_rows=None
+        num_points_rows=None,
+        discard_close_ind=None
     ):
         """Initialise the DiffImbalance class."""
         self.nfeatures_A = data_A.shape[1]
@@ -179,7 +186,10 @@ class DiffImbalance:
 
         if compute_error:
             assert num_points_rows is None, (
-                f"Error: if compute_error == True, the argument num_points_rows cannot be set."
+                f"Error: the option num_points_rows is not yet compatible with compute_error == True"
+            )
+            assert discard_close_ind is None, (
+                f"Error: the option discard_close_ind is not yet compatible with compute_error == True"
             )
             nrows = int(0.5 * ratio_rows_columns * data_A.shape[0])
             indices_rows = jax.random.choice(
@@ -188,6 +198,9 @@ class DiffImbalance:
             indices_columns = jnp.delete(jnp.arange(data_A.shape[0]), indices_rows)
             self.max_rank = indices_columns.shape[0]  # for correct normalization
         elif num_points_rows is not None:
+            assert discard_close_ind is None, (
+                f"Error: the option discard_close_ind is not yet compatible with num_points_rows != None"
+            )
             # decimate rows but not columns, and keep same indices in upper left square matrix
             indices_rows = jax.random.choice(
                 self.key, jnp.arange(data_A.shape[0]), shape=(num_points_rows,), replace=False
@@ -205,6 +218,7 @@ class DiffImbalance:
         self.data_B_columns = data_B[indices_columns]
 
         self.nrows = self.data_A_rows.shape[0]
+        self.ncolumns = self.data_A_columns.shape[0]
         self.periods_A = (
             jnp.ones(self.nfeatures_A) * jnp.array(periods_A)
             if periods_A is not None
@@ -221,9 +235,6 @@ class DiffImbalance:
         self.k_init = k_init
         self.k_final = k_final
 
-        # for efficiency reasons, faster sort in adaptive-lambda scheme
-        self.k_max_allowed = 100 if self.max_rank > 100 else self.max_rank + 1
-
         self.lambda_init = lambda_init
         self.lambda_final = lambda_final
         if init_params is not None:
@@ -235,6 +246,24 @@ class DiffImbalance:
         self.learning_rate = learning_rate
         self.learning_rate_decay = learning_rate_decay
         self.compute_error = compute_error
+        self.discard_close_ind = discard_close_ind
+
+        # construct mask to discard distances d[i, i-discard_close_ind:i+discard_close_ind+1], for each i
+        self.mask = None
+        if self.discard_close_ind is not None:
+            mask = jnp.abs( jnp.arange(self.nrows)[:,jnp.newaxis] - jnp.arange(self.ncolumns)[jnp.newaxis,:] )
+            mask = mask > discard_close_ind
+            # more columns than necessary discarded for starting and final rows, for shape compatibility
+            first_rows = jnp.concatenate((jnp.zeros(2*discard_close_ind+1), jnp.ones(self.ncolumns - 2*discard_close_ind-1)))
+            last_rows = jnp.concatenate(( jnp.ones(self.ncolumns-2*discard_close_ind-1), jnp.zeros(2*discard_close_ind+1)))
+            mask = mask.at[:discard_close_ind].set(first_rows)
+            mask = mask.at[-discard_close_ind:].set(last_rows)
+            self.mask = mask
+            self.max_rank -= 2 * self.discard_close_ind
+
+        # for efficiency reasons, faster sort in adaptive-lambda scheme
+        self.k_max_allowed = 100 if self.max_rank > 100 else self.max_rank + 1
+
         self.state = None
         self._distance_A = _compute_dist2_matrix_scaling  # TODO: assign other functions if other distances A are chosen
 
@@ -243,6 +272,10 @@ class DiffImbalance:
             f"Error: cannot extract {batches_per_epoch} minibatches "
             + f"from {self.nrows} samples."
         )
+        if batches_per_epoch > 1:
+            assert discard_close_ind is None, (
+                f"Error: the option discard_close_ind is not yet compatible with batches_per_epoch > 1"
+            ) 
         if point_adapt_lambda:
             assert self.k_init is not None and self.k_final is not None, (
                 f"Error: provide values of 'k_init' and 'k_final' "
@@ -302,6 +335,9 @@ class DiffImbalance:
                     jnp.where(periods, 1.0, 0.0) * jnp.round(diffs / periods) * periods
                 )
             dist2_matrix = jnp.sum(diffs * diffs, axis=-1)
+            if self.mask is not None:
+                dist2_matrix = dist2_matrix[self.mask].reshape((dist2_matrix.shape[0],-1))
+
             rank_matrix = dist2_matrix.argsort(axis=1).argsort(axis=1)
             if self.compute_error:
                 rank_matrix = rank_matrix + 1
@@ -385,7 +421,7 @@ class DiffImbalance:
             return current_lambda
 
         def _compute_diff_imbalance(
-            params, batch_A_rows, batch_A_columns, batch_B_ranks, step, batch_indices
+            params, batch_A_rows, batch_A_columns, batch_B_ranks, step
         ):
             """Compute the Differentiable Information Imbalance (DII) at the current step of the training.
 
@@ -398,7 +434,6 @@ class DiffImbalance:
                 batch_B_ranks (jnp.array(float)): matrix of shape (n_points_rows, n_points_columns), containing
                     the pre-computed target ranks in space B
                 step (int): number of current gradient descent step
-                batch_indices: indices of points included in the current mini-batch
 
             Returns:
                 diff_imbalance (float): current value of the DII
@@ -412,12 +447,12 @@ class DiffImbalance:
                 periods=self.periods_A,
             )
             N = dist2_matrix_A.shape[0]
-            if (
-                not self.compute_error
-            ):  # set distance of a point with itself to large number
-                dist2_matrix_A = dist2_matrix_A.at[jnp.arange(N), batch_indices].set(
+            if not self.compute_error:  # set distance of a point with itself to large number
+                dist2_matrix_A = dist2_matrix_A.at[jnp.arange(N), jnp.arange(N)].set(
                     +1e10
                 )
+            if self.mask is not None:  # apply mask to column indices around the row index
+                dist2_matrix_A = dist2_matrix_A[self.mask].reshape((dist2_matrix_A.shape[0],-1))
             lambdas = self.lambda_method(  # compute lambda values
                 dist2_matrix=dist2_matrix_A, step=step
             )
@@ -437,7 +472,7 @@ class DiffImbalance:
             return diff_imbalance, error_imbalance
 
         def _train_step(
-            state, batch_A_rows, batch_A_columns, batch_B_ranks, batch_indices
+            state, batch_A_rows, batch_A_columns, batch_B_ranks
         ):
             """Perform a single gradient descent step in the optimization of the DII.
 
@@ -449,7 +484,6 @@ class DiffImbalance:
                     the points labelling the columns of the distance matrix
                 batch_B_ranks (jnp.array(float)): matrix of shape (n_points_rows, n_points_columns), containing
                     the pre-computed target ranks in space B
-                batch_indices: indices of points included in the current mini-batch
 
             Returns:
                 state_new (flax.training.train_state.TrainState object): new training state after optimizer step
@@ -463,7 +497,6 @@ class DiffImbalance:
                 batch_A_columns=batch_A_columns,
                 batch_B_ranks=batch_B_ranks,
                 step=state.step,
-                batch_indices=batch_indices,
             )
             # Get loss and gradient
             imb_and_error, grads = jax.value_and_grad(loss_fn, has_aux=True)(
@@ -518,7 +551,6 @@ class DiffImbalance:
             self.data_A_columns,
             self.ranks_B[batch_indices],
             0,
-            batch_indices,
         )
         params_output = params_output.at[0].set(self.init_params)
         imbs_output = imbs_output.at[0].set(imb_start)
@@ -529,7 +561,7 @@ class DiffImbalance:
             self.key, subkey = jax.random.split(self.key, num=2)
             params_now, imb_now, error_now = self._train_epoch(
                 subkey
-            )  # self.train_loader(subkey))
+            )
             params_output = params_output.at[epoch_idx].set(params_now)
             imbs_output = imbs_output.at[epoch_idx].set(imb_now)
             errors_output = imbs_output.at[epoch_idx].set(error_now)
@@ -553,10 +585,6 @@ class DiffImbalance:
             error (float): error associated to the DII at the last step of the current training epoch.
                 Only used when return_error == True, but always returned for compatibility.
         """
-        all_batch_indices = jnp.split(
-            jax.random.permutation(key, self.nrows), self.batches_per_epoch
-        )
-
         # DON'T DELETE: ALTERNATIVE WAY, TO RESAMPLE POINTS IN TWO SUBSETS (ROWS AND COLUMNS)
         #if self.compute_error:
         #    self.key, subkey = jax.random.split(self.key, num=2)
@@ -573,25 +601,40 @@ class DiffImbalance:
         #        batch_columns=self.data_B_columns,
         #        periods=self.periods_B,
         #    )
-
-        for batch_indices in all_batch_indices:
-            self.state, imb, error = self._train_step(
-                self.state,
-                self.data_A_rows[batch_indices],
-                self.data_A_columns,
-                self.ranks_B[batch_indices],
-                batch_indices,
+        #----------------------------MINI-BATCH GD----------------------------
+        if self.batches_per_epoch > 1:
+            all_batch_indices = jnp.split(
+                jax.random.permutation(key, self.nrows), self.batches_per_epoch
             )
 
-        # DON'T DELETE: ALTERNATIVE WAY FOR MINI-BATCH GD
-        #for batch_indices in all_batch_indices:
-        #    self.state, imb, error = self._train_step(
-        #        self.state,
-        #        self.data_A_rows[batch_indices],
-        #        self.data_A_columns[batch_indices],
-        #        self.ranks_B[batch_indices][:,batch_indices].argsort().argsort(),
-        #        jnp.arange(batch_indices.shape[0]),
-        #    )
+            for i_batch, batch_indices in enumerate(all_batch_indices):
+                ordered_column_indices = np.ravel(np.delete(all_batch_indices, i_batch, axis=0))
+                ordered_column_indices = np.append(batch_indices, ordered_column_indices)
+                print(self.ranks_B.shape)
+                print(ordered_column_indices.shape)
+                self.state, imb, error = self._train_step(
+                    self.state,
+                    self.data_A_rows[batch_indices],
+                    self.data_A_columns[ordered_column_indices],
+                    self.ranks_B[batch_indices][:,ordered_column_indices],
+                )
+            # DON'T DELETE: ALTERNATIVE WAY FOR MINI-BATCH GD
+            #for batch_indices in all_batch_indices:
+            #    self.state, imb, error = self._train_step(
+            #        self.state,
+            #        self.data_A_rows[batch_indices],
+            #        self.data_A_columns[batch_indices],
+            #        self.ranks_B[batch_indices][:,batch_indices].argsort().argsort(),
+            #    )
+
+        #-----------------------------BATCH GD----------------------------
+        else:
+            self.state, imb, error = self._train_step(
+                self.state,
+                self.data_A_rows,
+                self.data_A_columns,
+                self.ranks_B,
+            )
 
         return self.state.params, imb, error
 
