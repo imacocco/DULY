@@ -126,8 +126,10 @@ class DiffImbalance:
             (default), 'adam' and 'adamw'. See https://optax.readthedocs.io/en/latest/api/optimizers.html for
             more.
         learning_rate (float): value of the learning rate. The default is 1e-1.
-        learning_rate_decay (bool): whether to damp the learning rate to zero following a cosine decay schedule,
-            if True, or keep it to a constant value, if False. The default is True.
+        learning_rate_decay (str): schedule to damp the learning rate to zero starting from the value provided 
+            with the attribute learning_rate. The avilable schedules are: cosine decay ("cos"), exponential
+            decay ("exp"; the initial learning rate is halved every 10 steps), or constant learning rate (None).
+            The default is "cos".
         compute_error (bool): whether to compute the standard Information Imbalance, if False (default), or to
             compute distances between points in two different groups and return the error associated to the DII
             during the training, if True
@@ -160,10 +162,11 @@ class DiffImbalance:
         k_final=1,
         lambda_init=None,
         lambda_final=None,
+        lambda_factor=0.1,
         init_params=None,
         optimizer_name="sgd",
         learning_rate=1e-1,
-        learning_rate_decay=True,
+        learning_rate_decay="cos",
         compute_error=False,
         ratio_rows_columns=1,
         num_points_rows=None,
@@ -237,6 +240,7 @@ class DiffImbalance:
 
         self.lambda_init = lambda_init
         self.lambda_final = lambda_final
+        self.lambda_factor = lambda_factor
         if init_params is not None:
             self.init_params = init_params
         else:
@@ -382,7 +386,12 @@ class DiffImbalance:
             ).astype(int)
             # take the k_max_allowed smallest distances with negative sign
             smallest_dist2, _ = jax.lax.top_k(-dist2_matrix, self.k_max_allowed)
-            current_lambdas = -smallest_dist2[:, current_k] * 0.1
+            current_lambdas = -smallest_dist2[:, current_k-1] * self.lambda_factor
+
+            #Adaptive scheme of cython code
+            #diffs_dists_2nd_1st = -smallest_dist2[:, 1] + smallest_dist2[:, 0]
+            #current_lambdas = 0.5*(diffs_dists_2nd_1st.min() + diffs_dists_2nd_1st.mean())
+
             return current_lambdas
 
         def _compute_adapt_lambda(dist2_matrix, step):
@@ -457,8 +466,12 @@ class DiffImbalance:
                 dist2_matrix=dist2_matrix_A, step=step
             )
             c_matrix = jax.nn.softmax(  # NB. diagonale elements are zero if not self.compute_error
-                -dist2_matrix_A / lambdas[:, jnp.newaxis], axis=1
+                -dist2_matrix_A / lambdas[:, jnp.newaxis],  axis=1#jax.lax.stop_gradient(lambdas[:, jnp.newaxis]), axis=1 ##lambdas[:, jnp.newaxis],  axis=1 #
             )
+            # alternativde definition of c_ij coefficients (sigmoid instead of softmax)
+            #c_matrix = jax.nn.sigmoid(
+            #    (lambdas[:, jnp.newaxis] - dist2_matrix_A)/(self.lambda_factor * lambdas[:, jnp.newaxis])
+            #)
 
             # compute DII and its error
             conditional_ranks = jnp.sum(batch_B_ranks * c_matrix, axis=1)
@@ -469,8 +482,18 @@ class DiffImbalance:
                 * jnp.std(conditional_ranks, ddof=1)
                 / jnp.sqrt(N)
             )
-            return diff_imbalance, error_imbalance
 
+            # analytical gradient of the DII
+            #diffs_squared = ((batch_A_rows[:,jnp.newaxis,:] - batch_A_columns[jnp.newaxis,:,:])
+            #                *(batch_A_rows[:,jnp.newaxis,:] - batch_A_columns[jnp.newaxis,:,:])) # shape (nrows, ncols, D)
+            #second_term = (c_matrix[:,:,jnp.newaxis] * diffs_squared).sum(axis=1, keepdims=True)
+            #grad_imbalance = (
+            #    4.0 * params / (N * (self.max_rank + 1))
+            #    * jnp.sum((batch_B_ranks * c_matrix)[:,:,jnp.newaxis] / lambdas[:,jnp.newaxis,jnp.newaxis]
+            #    * (-diffs_squared + second_term), axis=(0,1))
+            #)
+            return diff_imbalance, error_imbalance
+        
         def _train_step(
             state, batch_A_rows, batch_A_columns, batch_B_ranks
         ):
@@ -507,15 +530,36 @@ class DiffImbalance:
 
             # Update parameters
             state = state.apply_gradients(grads=grads)
-            # L1 step (B. Carpenter et al, 2008)
-            current_lr = self.lr_schedule(state.step)
-            state_new = state.replace(
-                params=jnp.where(state.params > 0, 1.0, 0.0)
-                * jnp.maximum(0, state.params - current_lr * self.l1_strength)
-                + jnp.where(state.params < 0, 1.0, 0.0)
-                * jnp.minimum(0, state.params + current_lr * self.l1_strength)
+            norm_init = jnp.sqrt((self.init_params**2).sum())
+            norm_now = jnp.sqrt((state.params**2).sum()) # scale weight vector to original norm
+            state = state.replace(
+                params=norm_init / norm_now * state.params
             )
-            return state_new, imb, error  # error always returned for compatibility
+
+
+            # Apply L1 penalty
+            if self.l1_strength != 0:
+                current_lr = self.lr_schedule(state.step)
+
+                # (GD clipping, B. Carpenter et al, 2008)
+                #state = state.replace(jnp.where(state.params > 0, 1.0, 0.0) 
+                #        * jnp.maximum(0, state.params - current_lr * self.l1_strength)
+                #        + jnp.where(state.params < 0, 1.0, 0.0)
+                #        * jnp.minimum(0, state.params + current_lr * self.l1_strength)
+                #)
+
+                # (Soft version of GD clipping)
+                candidate_params = state.params - jnp.sign(state.params) * current_lr * self.l1_strength
+                state = state.replace(params=state.params
+                    * (1. - jnp.where(state.params * candidate_params < 0, 1., 0.))
+                )
+
+                # scale weight vector to original norm
+                norm_now = jnp.sqrt((state.params**2).sum())
+                state = state.replace(
+                    params=norm_init / norm_now * state.params
+                )
+            return state, imb, error  # error always returned for compatibility
 
         # jit compilation of functions
         self._compute_rank_matrix_B = jax.jit(_compute_rank_matrix_B)
@@ -526,9 +570,10 @@ class DiffImbalance:
         self._compute_diff_imbalance = jax.jit(_compute_diff_imbalance)
         self._train_step = jax.jit(_train_step)
 
-    def train(self):
+    def train(self, bar_label=None):
         """Perform the full training of the DII, using the input attributes of the DiffImbalance object.
-
+        Args:
+            bar_label (str): label on the tqdm training bar, useful when several trains are performed
         Returns:
             params_output (jnp.array(float)): matrix of shape (num_epochs+1, n_features_A) containing the
                 scaling weights during the whole training, starting from the initialization
@@ -543,7 +588,7 @@ class DiffImbalance:
         # Construct output arrays and initialize them using inital weights
         params_output = jnp.empty(shape=(self.num_epochs + 1, self.nfeatures_A))
         imbs_output = jnp.empty(shape=(self.num_epochs + 1,))
-        errors_output = jnp.empty(shape=(self.num_epochs + 1,))
+        errors_output = jnp.empty(shape=(self.num_epochs + 1))#, self.nfeatures_A))
         batch_indices = jnp.arange(self.nrows // self.batches_per_epoch)
         imb_start, error_start = self._compute_diff_imbalance(
             self.init_params,
@@ -552,19 +597,22 @@ class DiffImbalance:
             self.ranks_B[batch_indices],
             0,
         )
-        params_output = params_output.at[0].set(self.init_params)
+        params_output = params_output.at[0].set(jnp.abs(self.init_params))
         imbs_output = imbs_output.at[0].set(imb_start)
         errors_output = errors_output.at[0].set(error_start)
 
         # Train over different epochs
-        for epoch_idx in tqdm(range(1, self.num_epochs + 1), desc="Training"):
+        desc = "Training"
+        if bar_label is not None:
+            desc += f" ({bar_label})"
+        for epoch_idx in tqdm(range(1, self.num_epochs + 1), desc=desc):
             self.key, subkey = jax.random.split(self.key, num=2)
             params_now, imb_now, error_now = self._train_epoch(
                 subkey
             )
-            params_output = params_output.at[epoch_idx].set(params_now)
+            params_output = params_output.at[epoch_idx].set(jnp.abs(params_now))
             imbs_output = imbs_output.at[epoch_idx].set(imb_now)
-            errors_output = imbs_output.at[epoch_idx].set(error_now)
+            errors_output = errors_output.at[epoch_idx].set(error_now)
         self.final_params = params_output[-1]
         if self.compute_error:
             return params_output, imbs_output, errors_output
@@ -607,18 +655,17 @@ class DiffImbalance:
                 jax.random.permutation(key, self.nrows), self.batches_per_epoch
             )
 
+            # 1st method for mini-batch GD (only subsample rows)
             for i_batch, batch_indices in enumerate(all_batch_indices):
                 ordered_column_indices = np.ravel(np.delete(all_batch_indices, i_batch, axis=0))
                 ordered_column_indices = np.append(batch_indices, ordered_column_indices)
-                print(self.ranks_B.shape)
-                print(ordered_column_indices.shape)
                 self.state, imb, error = self._train_step(
                     self.state,
                     self.data_A_rows[batch_indices],
                     self.data_A_columns[ordered_column_indices],
                     self.ranks_B[batch_indices][:,ordered_column_indices],
                 )
-            # DON'T DELETE: ALTERNATIVE WAY FOR MINI-BATCH GD
+            # DON'T DELETE: alternative way for mini-batch GD (subsample both rows and columns)
             #for batch_indices in all_batch_indices:
             #    self.state, imb, error = self._train_step(
             #        self.state,
@@ -634,6 +681,10 @@ class DiffImbalance:
                 self.data_A_rows,
                 self.data_A_columns,
                 self.ranks_B,
+            )
+        assert not jnp.isnan(self.state.params).any(), (
+                "Error: all the parameters were set to zero during the optimization. "
+                +"Reduce the value of l1_strength."
             )
 
         return self.state.params, imb, error
@@ -653,18 +704,28 @@ class DiffImbalance:
         elif self.optimizer_name.lower() == "sgd":
             opt_class = optax.sgd
         else:
-            assert False, f'Unknown optimizer "{opt_class}"'
-        # set the learning rate schedule (cosine decay or constant)
-        if self.learning_rate_decay:
+            raise ValueError(f'Unknown optimizer "{opt_class}". Choose among "sgd", "adam" and "adamw".')
+        
+        # set the learning rate schedule (cosine decay, exp decay or constant)
+        if self.learning_rate_decay == "cos":
             self.lr_schedule = optax.cosine_decay_schedule(
                 init_value=self.learning_rate,
                 decay_steps=self.num_epochs * self.batches_per_epoch,
             )
-        else:
+        elif self.learning_rate_decay == "exp":
+            self.lr_schedule = optax.exponential_decay(
+                init_value=self.learning_rate,
+                transition_steps=10,
+                decay_rate=2,
+            )
+        elif self.learning_rate_decay is None:
             self.lr_schedule = optax.constant_schedule(
                 value=self.learning_rate
             )
+        else:
+            raise ValueError(f'Unknown learning rate decay schedule "{opt_class}". Choose among None, "cos" and "exp".')
         optimizer = opt_class(self.lr_schedule)
+
         # Initialize training state
         self.state = train_state.TrainState.create(
             apply_fn=self._distance_A,
