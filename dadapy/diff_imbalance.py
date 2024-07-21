@@ -575,11 +575,11 @@ class DiffImbalance:
         Args:
             bar_label (str): label on the tqdm training bar, useful when several trains are performed
         Returns:
-            params_output (jnp.array(float)): matrix of shape (num_epochs+1, n_features_A) containing the
+            params_output (np.array(float)): matrix of shape (num_epochs+1, n_features_A) containing the
                 scaling weights during the whole training, starting from the initialization
-            imbs_output (jnp.array(float)): array of shape (num_epochs+1,) containing the DII during the
+            imbs_output (np.array(float)): array of shape (num_epochs+1,) containing the DII during the
                 whole training
-            errors_output (jnp.array(float)): array of shape (num_epochs+1,) containing the errors associated
+            errors_output (np.array(float)): array of shape (num_epochs+1,) containing the errors associated
                 to the DII during the whole training. Only returned when return_error == True.
         """
         # Initialize optimizer
@@ -615,9 +615,9 @@ class DiffImbalance:
             errors_output = errors_output.at[epoch_idx].set(error_now)
         self.final_params = params_output[-1]
         if self.compute_error:
-            return params_output, imbs_output, errors_output
+            return np.array(params_output), np.array(imbs_output), np.array(errors_output)
         else:
-            return params_output, imbs_output
+            return np.array(params_output), np.array(imbs_output)
 
     def _train_epoch(self, key):
         """Performs the training for a single epoch.
