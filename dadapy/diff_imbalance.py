@@ -105,9 +105,11 @@ class DiffImbalance:
         data_A (np.array(float), jnp.array(float)): feature space A, matrix of shape (n_points, n_features_A)
         data_B (np.array(float), jnp.array(float)): feature space B, matrix of shape (n_points, n_features_B)
         periods_A (np.array(float), jnp.array(float)): array of shape (n_features_A,), periods of features A.
-            The default is None, which means that the features A are treated as nonperiodic.
+            The default is None, which means that the features A are treated as nonperiodic. If only some 
+            features are periodic, the entry of the nonperiodic ones should be set to 0.
         periods_B (np.array(float), jnp.array(float)): array of shape (n_features_B,), periods of features B.
-            The default is None, which means that the features B are trated as nonperiodic.
+            The default is None, which means that the features B are trated as nonperiodic. If only some 
+            features are periodic, the entry of the nonperiodic ones should be set to 0.
         seed (int): seed of jax random generator
         num_epochs (int): number of training epochs
         batches_per_epoch (int): number of minibatches; must be a divisor of n_points. Each update of the weights is
@@ -572,8 +574,10 @@ class DiffImbalance:
 
     def train(self, bar_label=None):
         """Perform the full training of the DII, using the input attributes of the DiffImbalance object.
+
         Args:
             bar_label (str): label on the tqdm training bar, useful when several trains are performed
+            
         Returns:
             params_output (np.array(float)): matrix of shape (num_epochs+1, n_features_A) containing the
                 scaling weights during the whole training, starting from the initialization
@@ -704,7 +708,7 @@ class DiffImbalance:
         elif self.optimizer_name.lower() == "sgd":
             opt_class = optax.sgd
         else:
-            raise ValueError(f'Unknown optimizer "{opt_class}". Choose among "sgd", "adam" and "adamw".')
+            raise ValueError(f'Unknown optimizer "{self.optimizer_name.lower()}". Choose among "sgd", "adam" and "adamw".')
         
         # set the learning rate schedule (cosine decay, exp decay or constant)
         if self.learning_rate_decay == "cos":
@@ -723,7 +727,7 @@ class DiffImbalance:
                 value=self.learning_rate
             )
         else:
-            raise ValueError(f'Unknown learning rate decay schedule "{opt_class}". Choose among None, "cos" and "exp".')
+            raise ValueError(f'Unknown learning rate decay schedule "{self.learning_rate_decay}". Choose among None, "cos" and "exp".')
         optimizer = opt_class(self.lr_schedule)
 
         # Initialize training state

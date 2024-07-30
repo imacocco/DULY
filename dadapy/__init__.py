@@ -12,3 +12,4 @@ from .id_estimation import IdEstimation
 from .kstar import KStar
 from .metric_comparisons import MetricComparisons
 from .neigh_graph import NeighGraph
+from .causal_graph import CausalGraph
