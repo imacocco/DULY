@@ -78,8 +78,8 @@ class DiffImbalance:
 
         Example:
             point_adapt_lambda: False
-            k_init: null
-            k_final: null
+            k_init: None
+            k_final: None
             lambda_init: 1
             lambda_final: 1e-2
 
@@ -588,7 +588,7 @@ class DiffImbalance:
                     N+1
                 )
             nn_indices = jnp.argmin(rank_matrix, axis=1)
-            return np.array(nn_indices)
+            return nn_indices
 
         # jit compilation of functions
         self._compute_rank_matrix = jax.jit(_compute_rank_matrix)

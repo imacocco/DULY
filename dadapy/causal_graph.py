@@ -95,7 +95,7 @@ class CausalGraph(DiffImbalance):
             discard_close_ind=discard_close_ind
         )
         nn_indices = dii._return_nn_indices(variables=variables)
-        return nn_indices
+        return np.array(nn_indices)
 
     def optimize_present_to_future(
         self,
