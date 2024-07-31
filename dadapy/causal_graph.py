@@ -60,12 +60,48 @@ class CausalGraph(DiffImbalance):
         self.adj_matrix = None
         self.groups_dictionary = None
 
+    def return_nn_indices(
+        self,
+        variables,
+        num_samples,
+        time_lags,
+        discard_close_ind,
+    ):
+        """
+        Returns the indices of the nearest neighbors of each point, given the sampling method.
+
+        Args:
+            variables (list, jnp.array(int)): array of the coordinates used to build the distance space (with weights 1)
+            num_samples (int): number of samples harvested from the full time series
+            time_lags (list(int), np.array(int)): tested time lags between 'present' and 'future'
+            discard_close_ind (int): defines the "close points" for which distances and ranks are not computed: for each point i, 
+                the distances d[i,i-discard_close_ind:i+discard_close_ind+1] are discarded.
+        Returns:
+            nn_indices (np.array(float)): array of the nearest neighbors indices: nn_indices[i] is the index of the column
+                with value 1 in the rank matrix
+        """
+        assert num_samples < self.time_series.shape[0]-max(time_lags), (
+            f"Error: cannot extract {num_samples} samples from {self.time_series.shape[0]} initial samples, "
+            +f"if the maximum time lag is {max(time_lags)}.\nChoose a value of num_samples such that "
+            +f"num_samples < {self.time_series.shape[0]} - {max(time_lags)}"
+        )
+        indices_present = np.linspace(0, # select times defining the ensemble of trajectories
+                                      self.time_series.shape[0]-max(time_lags)-1, 
+                                      num_samples, dtype=int) 
+        coords_present = self.time_series[indices_present]
+        dii = DiffImbalance(
+            data_A=coords_present,
+            data_B=coords_present,
+            discard_close_ind=discard_close_ind
+        )
+        nn_indices = dii._return_nn_indices(variables=variables)
+        return nn_indices
+
     def optimize_present_to_future(
         self,
         num_samples,
         time_lags,
         target_variables="all",
-        return_weights_imbs=True,
         num_epochs=100,
         batches_per_epoch=1,
         l1_strength=0.0,
@@ -90,7 +126,7 @@ class CausalGraph(DiffImbalance):
             num_samples (int): number of samples harvested from the full time series, interpreted as
                 independent initial conditions of the same dynamical process
             time_lags (list(int), np.ndarray(int)): tested time lags between 'present' and 'future'
-            target_variables (str or list(int), np.ndarray(int)): list or np.ndarray of the target variables
+            target_variables (str or list(int), np.array(int)): list or np.array of the target variables
                 defining the distance space in the future. By default target_variables=="all", which means 
                 that the optimization is iterated over all the variables as target.
             num_epochs (int): number of training epochs
@@ -136,6 +172,10 @@ class CausalGraph(DiffImbalance):
             imbs (np.array(float)): array of shape (n_target_variables, n_time_lags, num_epochs+1) containing the DII 
                 during the whole trainings
         """
+        assert num_samples < self.time_series.shape[0]-max(time_lags), (
+            f"Error: cannot extract {num_samples} samples from {self.time_series.shape[0]} initial samples, "
+            +f"if the maximum time lag is {np.max(time_lags)}.\nChoose a smaller value of num_samples."
+        )
         indices_present = np.linspace(0, # select times defining the ensemble of trajectories
                                       self.time_series.shape[0]-max(time_lags)-1, 
                                       num_samples, dtype=int)        

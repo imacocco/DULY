@@ -304,7 +304,7 @@ class DiffImbalance:
 
         # create jitted functions
         self._create_functions()
-        self.ranks_B = self._compute_rank_matrix_B(
+        self.ranks_B = self._compute_rank_matrix(
             batch_rows=self.data_B_rows,
             batch_columns=self.data_B_columns,
             periods=self.periods_B,
@@ -319,7 +319,7 @@ class DiffImbalance:
             self.lambda_method = self._compute_lambda_decay
 
     def _create_functions(self):
-        def _compute_rank_matrix_B(batch_rows, batch_columns, periods):
+        def _compute_rank_matrix(batch_rows, batch_columns, periods):
             """Compute the matrix of ranks for the target space B.
 
             Args:
@@ -538,7 +538,6 @@ class DiffImbalance:
                 params=norm_init / norm_now * state.params
             )
 
-
             # Apply L1 penalty
             if self.l1_strength != 0:
                 current_lr = self.lr_schedule(state.step)
@@ -562,15 +561,44 @@ class DiffImbalance:
                     params=norm_init / norm_now * state.params
                 )
             return state, imb, error  # error always returned for compatibility
+        
+        def _return_nn_indices(variables):
+            """
+            Returns the indices of the nearest neighbors of each point.
+
+            Args:
+                variables (list, jnp.array(int)): array of the coordinates used to build the distance space (with weights 1) 
+
+            Returns:
+                nn_indices (np.array(float)): array of the nearest neighbors indices: nn_indices[i] is the index of the column
+                    with value 1 in the rank matrix
+            """
+            mask_rows = jnp.zeros_like(self.data_A_rows)
+            mask_columns = jnp.zeros_like(self.data_A_columns)
+            mask_rows = mask_rows.at[:,variables].set(1)
+            mask_columns = mask_columns.at[:,variables].set(1)
+            rank_matrix = self._compute_rank_matrix(
+                batch_rows=self.data_A_rows * mask_rows,
+                batch_columns=self.data_A_columns * mask_columns,
+                periods=self.periods_A,
+            )
+            N = rank_matrix.shape[0]
+            if not self.compute_error and not self.discard_close_ind:  # discard distance rank of a point with itself
+                rank_matrix = rank_matrix.at[jnp.arange(N), jnp.arange(N)].set(
+                    N+1
+                )
+            nn_indices = jnp.argmin(rank_matrix, axis=1)
+            return np.array(nn_indices)
 
         # jit compilation of functions
-        self._compute_rank_matrix_B = jax.jit(_compute_rank_matrix_B)
+        self._compute_rank_matrix = jax.jit(_compute_rank_matrix)
         self._cosine_decay_func = jax.jit(_cosine_decay_func)
         self._compute_point_adapt_lambdas = jax.jit(_compute_point_adapt_lambdas)
         self._compute_adapt_lambda = jax.jit(_compute_adapt_lambda)
         self._compute_lambda_decay = jax.jit(_compute_lambda_decay)
         self._compute_diff_imbalance = jax.jit(_compute_diff_imbalance)
         self._train_step = jax.jit(_train_step)
+        self._return_nn_indices = jax.jit(_return_nn_indices)
 
     def train(self, bar_label=None):
         """Perform the full training of the DII, using the input attributes of the DiffImbalance object.
@@ -648,7 +676,7 @@ class DiffImbalance:
         #    self.data_A_columns = self.data_A[indices_columns]
         #    self.data_B_rows = self.data_B[indices_rows]
         #    self.data_B_columns = self.data_B[indices_columns]
-        #    self.ranks_B = self._compute_rank_matrix_B(
+        #    self.ranks_B = self._compute_rank_matrix(
         #        batch_rows=self.data_B_rows,
         #        batch_columns=self.data_B_columns,
         #        periods=self.periods_B,
