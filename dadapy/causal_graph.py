@@ -33,9 +33,14 @@ class CausalGraph(DiffImbalance):
     """Constructs a coarse-grained causal graph where variables are grouped into single nodes.
 
     Attributes:
-        time_series (np.ndarray(float)): array of shape (N_times,D), where N_times is the length
+        time_series (np.array(float)): array of shape (N_times,D), where N_times is the length
             of trajectory and D is the number of dynamical variables. The sampling time is supposed 
             to be constant along the trajectory and for all the variables.
+        coords_present (np.array(float)): array of shape (N_samples,D) containing the samples of the 
+            D-dimensional trajectory at time t=0; read only when time_series==None
+        coords_future (np.array(float)): array of shape (N_samples,D,n_lags) containing the samples of the 
+            D-dimensional trajectory at different time lags; read only when time_series==None. If you want
+            to test a single time lag, reshape the dataset with coords_future[:,:,np.newaxis]. 
         periods (np.ndarray(float)): array of shape (D,) containing the periods of the dynamical variables.
             The default is None, which means that the variables are treated as nonperiodic. If only some 
             variables are periodic, the entry of the nonperiodic ones should be set to 0.
@@ -44,10 +49,34 @@ class CausalGraph(DiffImbalance):
     def __init__(
         self,
         time_series,
+        coords_present=None,
+        coords_future=None,
         periods=None,
         seed=0,
     ):
         self.time_series = time_series
+        self.coords_present = None
+        self.coords_future = None
+        if coords_present is not None or coords_future is not None:
+            warnings.warn(
+                f"You passed the whole time series as input; the arguments coords_present and coords_future will be ignored"
+            )
+        if time_series is None:
+            assert coords_present is not None and coords_future is not None, (
+                "Error: provide as input either the full time series with the argument time_series, or the present and future "
+                +"coordinates with the arguments coords_present and coords_future"
+            )
+            assert coords_present.shape == coords_future.shape[:2], (
+                "Error: arguments coords_present and coords_future should have shapes (N_samples, D_features) and (N_samples, D_features, n_lags),\n "
+                +"but the number of samples and/or the number of features do not match."
+            )
+            assert len(coords_future.shape) == 3, (
+                f"Error: coords_future has shape {coords_future.shape}, while the expected shape is (N_samples, D_features, n_lags).\n"
+                +"If you want to test a single time lag, provide as input coords_future[:,:,np.newaxis]."
+            )
+            self.coords_present = coords_present
+            self.coords_future = coords_future
+
         self.periods = (
             np.ones(time_series.shape[1]) * np.array(periods)
             if periods is not None
@@ -67,8 +96,7 @@ class CausalGraph(DiffImbalance):
         time_lags,
         discard_close_ind,
     ):
-        """
-        Returns the indices of the nearest neighbors of each point, given the sampling method.
+        """Returns the indices of the nearest neighbors of each point, given the sampling method.
 
         Args:
             variables (list, jnp.array(int)): array of the coordinates used to build the distance space (with weights 1)
@@ -85,13 +113,16 @@ class CausalGraph(DiffImbalance):
             +f"if the maximum time lag is {max(time_lags)}.\nChoose a value of num_samples such that "
             +f"num_samples < {self.time_series.shape[0]} - {max(time_lags)}"
         )
-        indices_present = np.linspace(0, # select times defining the ensemble of trajectories
-                                      self.time_series.shape[0]-max(time_lags)-1, 
-                                      num_samples, dtype=int) 
-        coords_present = self.time_series[indices_present]
+        if self.time_series is not None:
+            indices_present = np.linspace(0, # select times defining the ensemble of trajectories
+                                        self.time_series.shape[0]-max(time_lags)-1, 
+                                        num_samples, dtype=int) 
+            coords_present = self.time_series[indices_present]
+        else:
+            coords_present = self.coords_present
         dii = DiffImbalance(
             data_A=coords_present,
-            data_B=coords_present,
+            data_B=coords_present, # dummy argument
             discard_close_ind=discard_close_ind
         )
         nn_indices = dii._return_nn_indices(variables=variables)
@@ -119,8 +150,7 @@ class CausalGraph(DiffImbalance):
         num_points_rows=None,
         discard_close_ind=None
     ):
-        """
-        Iteratively optimizes the DII from the full space in the present to a target space in the future.
+        """Iteratively optimizes the DII from the full space in the present to a target space in the future.
     
         Args:
             num_samples (int): number of samples harvested from the full time series, interpreted as
@@ -172,14 +202,24 @@ class CausalGraph(DiffImbalance):
             imbs (np.array(float)): array of shape (n_target_variables, n_time_lags, num_epochs+1) containing the DII 
                 during the whole trainings
         """
-        assert num_samples < self.time_series.shape[0]-max(time_lags), (
-            f"Error: cannot extract {num_samples} samples from {self.time_series.shape[0]} initial samples, "
-            +f"if the maximum time lag is {np.max(time_lags)}.\nChoose a smaller value of num_samples."
-        )
-        indices_present = np.linspace(0, # select times defining the ensemble of trajectories
-                                      self.time_series.shape[0]-max(time_lags)-1, 
-                                      num_samples, dtype=int)        
-        coords_present = self.time_series[indices_present]
+        if self.time_series is not None:
+            assert num_samples < self.time_series.shape[0]-max(time_lags), (
+                f"Error: cannot extract {num_samples} samples from {self.time_series.shape[0]} initial samples, "
+                +f"if the maximum time lag is {np.max(time_lags)}.\nChoose a smaller value of num_samples."
+            )
+            indices_present = np.linspace(0, # select times defining the ensemble of trajectories
+                                        self.time_series.shape[0]-max(time_lags)-1, 
+                                        num_samples, dtype=int)        
+            coords_present = self.time_series[indices_present]
+        else:
+            assert time_lags is None or len(time_lags) == self.coords_future.shape[2], (
+                f"Error: time_lags contains {len(time_lags)} elements but the last axis of coords_future has "
+                +f"dimension {self.coords_future.shape[2]}.\nProvide the correct number of time lags or set time_lags=None."
+            )
+            if time_lags is None:
+                time_lags = np.arange(1,self.coords_future.shape[2]+1)
+            coords_present = self.coords_present
+
         if target_variables == "all":
             target_variables = np.arange(self.num_variables)
 
@@ -188,7 +228,10 @@ class CausalGraph(DiffImbalance):
         # loop over target variables and time lags
         for i_var, target_var in enumerate(target_variables):
             for j_tau, tau in enumerate(time_lags):
-                coords_future = self.time_series[indices_present+tau,target_var].reshape((-1,1))
+                if self.time_series is not None:
+                    coords_future = self.time_series[indices_present+tau,target_var].reshape((-1,1))
+                else:
+                    coords_future = self.coords_future[:,:,j_tau]
 
                 dii = DiffImbalance(
                     data_A=coords_present,
@@ -224,8 +267,7 @@ class CausalGraph(DiffImbalance):
         return weights_final, imbs
         
     def compute_adj_matrix(self, weights=None, threshold=1e-1):
-        """
-        Computes the adjacency matrix from the optimized weights produced by the method optimize_present_to_future.
+        """Computes the adjacency matrix from the optimized weights produced by the method optimize_present_to_future.
 
         As a preliminary step before applying the threshold, the maximum weight over the tested time lags is taken
         for each pair X_i(0) -> X_j(tau) (i,j=1,...,D)
@@ -261,8 +303,7 @@ class CausalGraph(DiffImbalance):
         return adj_matrix
     
     def _ancestors(self, adj_matrix=None): # this replaces function "ancestors" coded by Matteo
-        """
-        Finds the ancestors of each node in the directed graph described by the input adjacency matrix.
+        """Finds the ancestors of each node in the directed graph described by the input adjacency matrix.
 
         Args:
             adj_matrix (np.ndarray(float)): binary matrix of shape (D,D) defining the links of a directed 
@@ -285,8 +326,7 @@ class CausalGraph(DiffImbalance):
         return min_auto_sets
 
     def find_groups(self, adj_matrix=None):
-        """
-        Finds the groups of variables defining new nodes in the coarse-grained causal graph.
+        """Finds the groups of variables defining new nodes in the coarse-grained causal graph.
 
         Args:
             adj_matrix (np.ndarray(float)): binary matrix of shape (D,D) defining the links of a directed 
@@ -346,7 +386,7 @@ class CausalGraph(DiffImbalance):
 
 
     def community_graph_visualization(self, groups_dictionary=None, adj_matrix=None): #features, metafeatures, adjacency):
-        '''Plots a visual representation of the coarse-grained causal graph
+        """Plots a visual representation of the coarse-grained causal graph
 
         Args:
             groups_dictionary (dict): dictionary with pairs (group_id,level) as keys and lists containing
@@ -355,7 +395,7 @@ class CausalGraph(DiffImbalance):
             adj_matrix (np.array(float)): matrix of shape (D,D) defining the links between the variables 
                 after thresholding the matrix of the optimized weights. If None, the output of the last call
                 of 'compute_adj_matrix' is employed.
-        '''
+        """
         # construct graph
         G = nx.DiGraph()
         keys = list(groups_dictionary.keys())
