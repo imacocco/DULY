@@ -77,13 +77,14 @@ class DiffImbalance:
         1. Global and non-adaptive: lambda is equal for all the points and its value is explicitely set by the user.
 
         Example:
-            point_adapt_lambda: False
-            k_init: None
-            k_final: None
-            lambda_init: 1
-            lambda_final: 1e-2
+            point_adapt_lambda=False
+            k_init=None
+            k_final=None
+            lambda_init=1
+            lambda_final=1e-2
 
-        2. Global and adaptive: lambda is equal for all the points and is set as a fraction (1/10) of the average square distance of neighbor k.
+        2. Global and adaptive: lambda is equal for all the points and is set as a fraction (given by lambda_factor, 
+        1/10 by default) of the average square distance of neighbor k.
 
         Example:
             point_adapt_lambda: False
@@ -91,8 +92,10 @@ class DiffImbalance:
             k_final: 1
             lambda_init: None  # lambda_init and lambda_final are ignored if k_init and k_final are not None
             lambda_final: None
+            lambda_factor=1/10
 
-        3. Point-dependent and adaptive: lambda is different for each point and is set as a fraction (1/10) of the square distance of neighbor k.
+        3. Point-dependent and adaptive: lambda is different for each point and is set as a fraction (given by lambda_factor, 
+        1/10 by default) of the square distance of neighbor k.
 
         Example:
             point_adapt_lambda: True
@@ -100,6 +103,7 @@ class DiffImbalance:
             k_final: 1
             lambda_init: None # lambda_init and lambda_final are ignored if k_init and k_final are not None
             lambda_final: None
+            lambda_factor=1/10
 
     Attributes:
         data_A (np.array(float), jnp.array(float)): feature space A, matrix of shape (n_points, n_features_A)
@@ -122,6 +126,7 @@ class DiffImbalance:
         k_final (int): initial rank of the neighbors used to set lambda. The default is 1.
         lambda_init (float): initial value of lambda
         lambda_final (float): final value of lambda
+        lambda_factor (float): factor defining the scale of lambda
         init_params (np.array(float), jnp.array(float)): array of shape (n_features_A,) containing the initial
             values of the scaling weights to be optimized. If None, init_params == [0.1, 0.1, ..., 0.1].
         optimizer_name (str): name of the optimizer, calling the Optax library. The possible choices are 'sgd'
@@ -562,7 +567,7 @@ class DiffImbalance:
                 )
             return state, imb, error  # error always returned for compatibility
         
-        def _return_nn_indices(variables):
+        def _return_nn_indices():#variables):
             """
             Returns the indices of the nearest neighbors of each point.
 
@@ -573,13 +578,13 @@ class DiffImbalance:
                 nn_indices (np.array(float)): array of the nearest neighbors indices: nn_indices[i] is the index of the column
                     with value 1 in the rank matrix
             """
-            mask_rows = jnp.zeros_like(self.data_A_rows)
-            mask_columns = jnp.zeros_like(self.data_A_columns)
-            mask_rows = mask_rows.at[:,variables].set(1)
-            mask_columns = mask_columns.at[:,variables].set(1)
+            #mask_rows = jnp.zeros_like(self.data_A_rows)
+            #mask_columns = jnp.zeros_like(self.data_A_columns)
+            #mask_rows = mask_rows.at[:,variables].set(1)
+            #mask_columns = mask_columns.at[:,variables].set(1)
             rank_matrix = self._compute_rank_matrix(
-                batch_rows=self.data_A_rows * mask_rows,
-                batch_columns=self.data_A_columns * mask_columns,
+                batch_rows=self.data_A_rows, #* mask_rows,
+                batch_columns=self.data_A_columns, #* mask_columns,
                 periods=self.periods_A,
             )
             N = rank_matrix.shape[0]
