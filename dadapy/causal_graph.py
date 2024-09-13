@@ -84,8 +84,10 @@ class CausalGraph(DiffImbalance):
         )
         self.seed = seed
         self.num_variables = self.time_series.shape[1]
-        self.imbs = None
-        self.weights = None
+        self.imbs_training = None
+        self.weights_final = None
+        self.imbs_final = None
+        self.errors_final = None
         self.adj_matrix = None
         self.groups_dictionary = None
 
@@ -212,8 +214,13 @@ class CausalGraph(DiffImbalance):
         Returns:
             weights_final (np.array(float)): array of shape (n_target_variables,n_time_lags,D) containing the
                 D final scaling weights for each optimization, where D is the number of variables in the time series
-            imbs (np.array(float)): array of shape (n_target_variables, n_time_lags, num_epochs+1) containing the DII 
+            imbs_training (np.array(float)): array of shape (n_target_variables, n_time_lags, num_epochs+1) containing the DII 
                 during the whole trainings
+            imbs_final (np.array(float)): array of shape (n_target_variables, n_time_lags) containing the DII at the end of
+                each training, computed over the full data set even when mini-batches are used in the training
+            errors_final (np.array(float)): array of shape (n_target_variables, n_time_lags) containing the errors of the DII 
+                at the end of each training, computed over the full data set. When compute_error == False, the array only contains
+                'None' elements
         """
         if self.time_series is not None:
             assert num_samples < self.time_series.shape[0]-max(time_lags), (
@@ -239,8 +246,10 @@ class CausalGraph(DiffImbalance):
         if target_variables == "all":
             target_variables = np.arange(self.num_variables)
 
-        imbs = np.zeros((len(target_variables),len(time_lags),num_epochs+1))
+        imbs_training = np.zeros((len(target_variables),len(time_lags),num_epochs+1))
         weights_final = np.zeros((len(target_variables),len(time_lags),self.num_variables)) # only final weights saved; may be modified
+        imbs_final = np.zeros((len(target_variables),len(time_lags)))
+        errors_final = np.zeros((len(target_variables),len(time_lags)))
         # loop over target variables and time lags
         for i_var, target_var in enumerate(target_variables):
             for j_tau, tau in enumerate(time_lags):
@@ -273,18 +282,20 @@ class CausalGraph(DiffImbalance):
                     num_points_rows=num_points_rows,
                     discard_close_ind=discard_close_ind
                 )
-                if compute_error:
-                    weights, imbs[i_var,j_tau], _ = dii.train(bar_label=f"target_var={target_var}, tau={tau}")
-                else:
-                    weights, imbs[i_var,j_tau] = dii.train(bar_label=f"target_var={target_var}, tau={tau}")
-                # save final weights only
-                weights_final_temp = weights[-1].reshape((self.num_variables, embedding_dim))
+                weights_training, imbs_training[i_var,j_tau] = dii.train(bar_label=f"target_var={target_var}, tau={tau}")
+                # save final weights
+                weights_final_temp = weights_training[-1].reshape((self.num_variables, embedding_dim))
                 weights_final_temp = np.max(weights_final_temp, axis=1) # for each variable take only largest weight over embedding components
-                weights_final[i_var,j_tau] = weights_final_temp 
+                weights_final[i_var,j_tau] = weights_final_temp
+                # save final imbalance (on the full dataset) and its error
+                imbs_final[i_var,j_tau] = dii.imb_final
+                errors_final[i_var,j_tau] = dii.error_final
         
-        self.weights = weights_final
-        self.imbs = imbs
-        return weights_final, imbs
+        self.weights_final = weights_final
+        self.imbs_training = imbs_training
+        self.imbs_final = imbs_final
+        self.errors_final = errors_final
+        return weights_final, imbs_training, imbs_final, errors_final
         
     def compute_adj_matrix(self, weights=None, threshold=1e-1):
         """Computes the adjacency matrix from the optimized weights produced by the method optimize_present_to_future.
