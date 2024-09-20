@@ -757,7 +757,7 @@ class DiffImbalance:
             self.lr_schedule = optax.exponential_decay(
                 init_value=self.learning_rate,
                 transition_steps=10,
-                decay_rate=2,
+                decay_rate=0.5,
             )
         elif self.learning_rate_decay is None:
             self.lr_schedule = optax.constant_schedule(
