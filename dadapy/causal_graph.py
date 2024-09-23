@@ -421,7 +421,7 @@ class CausalGraph(DiffImbalance):
         return groups_dictionary
 
 
-    def community_graph_visualization(self, groups_dictionary, adj_matrix): #features, metafeatures, adjacency):
+    def community_graph_visualization(self, groups_dictionary, adj_matrix, type=None, **kwargs): 
         """Plots a visual representation of the coarse-grained causal graph
 
         Args:
@@ -429,6 +429,7 @@ class CausalGraph(DiffImbalance):
                 the indices of the variables in each group as values
             adj_matrix (np.array(float)): matrix of shape (D,D) defining the links between the variables 
                 after thresholding the matrix of the optimized weights
+            type (str): if "microscopic" it returns the visualization with one node for each variable
 
         Returns:
             G (nx.diGraph object): final coarse-grained causal graph
@@ -439,6 +440,62 @@ class CausalGraph(DiffImbalance):
         assert groups_dictionary is not None, (
             "Error: provide as intput the groups dictionary computed with the method find_groups"
         )
+
+        if type == 'microscopic':   
+            G_=nx.from_numpy_array(adj_matrix,create_using=nx.DiGraph)
+
+            features={}
+            metafeatures={}
+
+            for element in groups_dictionary.items():
+                for variable in element[1]:
+                    features.update({variable:element[0][0]})
+                    metafeatures.update({variable:element[0][1]})
+
+            communities=[set([el for el, pos in features.items() if pos==k ]) for k in set(features.values())]
+            metacommunities=[set([el for el, pos in metafeatures.items() if pos==k ]) for k in set(metafeatures.values())]
+
+            assert len(communities) != 1, (
+            f'Error: Only one group is present. Try plotting with a standard function of networkx.')
+            
+            G=nx.DiGraph()
+            for comm in communities:
+                G.add_node(str(list(comm)))
+            for i in range(len(communities)):
+                present=list(communities[i])
+                time = metafeatures[present[0]]
+                if time < len(metacommunities) - 1:
+                    future = list(metacommunities[metafeatures[list(communities[i])[0]]+1])
+                    connections = (np.where(adj_matrix[np.ix_(present,future)]!=0))
+                    for j in range(len(connections[0])):
+                        looking = future[connections[1][j]]
+                        final = communities[np.where([looking in communities[i] for i in range(len(communities))])[0][0]]
+                        G.add_edge(str(present),str(list(final)))
+
+            iter = [el for el in G.edges]
+            for edge in iter:
+                if sum(1 for _ in nx.all_simple_paths(G, source=edge[0], target=edge[1]))>1:
+                    G.remove_edge(edge[0],edge[1])
+
+
+            options = {'scale':0.1, 'k1':1, 'k2':2, 'cmap':plt.cm.Blues, 
+            }
+            options.update(kwargs)
+
+
+            # Compute positions for the node clusters as if they were themselves nodes in a
+            # supergraph using a larger scale factor
+            superpos = nx.spring_layout(G, k=options['k1'], seed=429)
+
+            # Use the "supernode" positions as the center of each node cluster
+            centers = list(superpos.values())
+            pos = {}
+            for center, comm in zip(centers, communities):
+                pos.update(nx.spring_layout(nx.subgraph(G, comm), scale=options['scale'], k=options['k2'], center=center, seed=1430))
+
+            nx.draw(G, pos=pos, node_color=[metafeatures[i] for i in range(len(adj_matrix))], cmap=plt.cm.Blues, with_labels=True)
+            plt.show()
+            return G
 
         # construct graph
         G = nx.DiGraph()
@@ -489,6 +546,7 @@ class CausalGraph(DiffImbalance):
             'arrowstyle': '-|>',
             'arrowsize': 12,
         }
+        options.update(kwargs)
         nx.draw_circular(G, arrows=True, with_labels=True, **options)
         plt.show()
 
