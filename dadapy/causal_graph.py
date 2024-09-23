@@ -491,9 +491,9 @@ class CausalGraph(DiffImbalance):
             centers = list(superpos.values())
             pos = {}
             for center, comm in zip(centers, communities):
-                pos.update(nx.spring_layout(nx.subgraph(G, comm), scale=options['scale'], k=options['k2'], center=center, seed=1430))
+                pos.update(nx.spring_layout(nx.subgraph(G_, comm), scale=options['scale'], k=options['k2'], center=center, seed=1430))
 
-            nx.draw(G, pos=pos, node_color=[metafeatures[i] for i in range(len(adj_matrix))], cmap=plt.cm.Blues, with_labels=True)
+            nx.draw(G_, pos=pos, node_color=[metafeatures[i] for i in range(len(adj_matrix))], cmap=plt.cm.Blues, with_labels=True)
             plt.show()
             return G
 
