@@ -465,12 +465,13 @@ class CausalGraph(DiffImbalance):
                 present=list(communities[i])
                 time = metafeatures[present[0]]
                 if time < len(metacommunities) - 1:
-                    future = list(metacommunities[metafeatures[list(communities[i])[0]]+1])
-                    connections = (np.where(adj_matrix[np.ix_(present,future)]!=0))
-                    for j in range(len(connections[0])):
-                        looking = future[connections[1][j]]
-                        final = communities[np.where([looking in communities[i] for i in range(len(communities))])[0][0]]
-                        G.add_edge(str(present),str(list(final)))
+                    for step in range(1,len(metacommunities) - time):
+                        future = list(metacommunities[metafeatures[list(communities[i])[0]]+step])
+                        connections = (np.where(adj_matrix[np.ix_(present,future)]!=0))
+                        for j in range(len(connections[0])):
+                            looking = future[connections[1][j]]
+                            final = communities[np.where([looking in communities[i] for i in range(len(communities))])[0][0]]
+                            G.add_edge(str(present),str(list(final)))
 
             iter = [el for el in G.edges]
             for edge in iter:
