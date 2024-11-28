@@ -121,6 +121,7 @@ class DiffImbalance:
         batches_per_epoch (int): number of minibatches; must be a divisor of n_points. Each update of the weights is
             carried out by computing the gradient over n_points / batches_per_epoch points. The default is 1, which
             means that the gradient is computed over all the available points (batch GD).
+        batches_method (str): method for minibatch implementation (either 'all_columns' or 'sample_columns')
         l1_strength (float): strength of the L1 regularization (LASSO) term. The default is 0.
         point_adapt_lambda (bool): whether to use a global smoothing parameter lambda for the c_ij coefficients
             in the DII (if False), or a different parameter for each point (if True). The default is False.
@@ -165,6 +166,7 @@ class DiffImbalance:
         seed=0,
         num_epochs=100,
         batches_per_epoch=1,
+        batches_method='all',
         l1_strength=0.0,
         point_adapt_lambda=False,
         k_init=1,
@@ -246,6 +248,7 @@ class DiffImbalance:
         )
         self.num_epochs = num_epochs
         self.batches_per_epoch = batches_per_epoch
+        self.batches_method = batches_method
         self.l1_strength = l1_strength
         self.k_init = k_init
         self.k_final = k_final
@@ -306,7 +309,10 @@ class DiffImbalance:
         if batches_per_epoch > 1:
             assert (
                 discard_close_ind is None
-            ), f"Error: the option discard_close_ind is not yet compatible with batches_per_epoch > 1"
+            ), f"Error: option discard_close_ind is not yet compatible with batches_per_epoch > 1"
+            assert (
+                batches_method == 'all' or batches_method == 'sample_columns'
+            ), f"Error: option batches_method can be either 'all' or 'sample_columns'"
         if point_adapt_lambda:
             assert self.k_init is not None and self.k_final is not None, (
                 f"Error: provide values of 'k_init' and 'k_final' "
@@ -723,28 +729,30 @@ class DiffImbalance:
                 jax.random.permutation(key, self.nrows), self.batches_per_epoch
             )
 
-            # 1st method for mini-batch GD (only subsample rows)
-            for i_batch, batch_indices in enumerate(all_batch_indices):
-                ordered_column_indices = np.ravel(
-                    np.delete(all_batch_indices, i_batch, axis=0)
-                )
-                ordered_column_indices = np.append(
-                    batch_indices, ordered_column_indices
-                )
-                self.state, imb = self._train_step(
-                    self.state,
-                    self.data_A_rows[batch_indices],
-                    self.data_A_columns[ordered_column_indices],
-                    self.ranks_B[batch_indices][:, ordered_column_indices],
-                )
-            # DON'T DELETE: alternative way for mini-batch GD (subsample both rows and columns)
-            # for batch_indices in all_batch_indices:
-            #    self.state, imb, error = self._train_step(
-            #        self.state,
-            #        self.data_A_rows[batch_indices],
-            #        self.data_A_columns[batch_indices],
-            #        self.ranks_B[batch_indices][:,batch_indices].argsort().argsort(),
-            #    )
+            if self.batches_method == 'all':
+                # 1st method for mini-batch GD (only subsample rows)
+                for i_batch, batch_indices in enumerate(all_batch_indices):
+                    ordered_column_indices = np.ravel(
+                        np.delete(all_batch_indices, i_batch, axis=0)
+                    )
+                    ordered_column_indices = np.append(
+                        batch_indices, ordered_column_indices
+                    )
+                    self.state, imb = self._train_step(
+                        self.state,
+                        self.data_A_rows[batch_indices],
+                        self.data_A_columns[ordered_column_indices],
+                        self.ranks_B[batch_indices][:, ordered_column_indices],
+                    )
+            elif self.batches_method == 'sample_columns':
+                # 2nd method for mini-batch GD (subsample both rows and columns)
+                for batch_indices in all_batch_indices:
+                    self.state, imb, error = self._train_step(
+                        self.state,
+                        self.data_A_rows[batch_indices],
+                        self.data_A_columns[batch_indices],
+                        self.ranks_B[batch_indices][:,batch_indices].argsort().argsort(),
+                    )
 
         # -----------------------------BATCH GD----------------------------
         else:
