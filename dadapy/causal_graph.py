@@ -60,6 +60,7 @@ class CausalGraph(DiffImbalance):
         self.num_variables, self.periods = self._check_and_initialize_args(periods)
         self.seed = seed
         self.imbs_training = None
+        self.weights_training = None
         self.weights_final = None
         self.imbs_final = None
         self.errors_final = None
@@ -106,9 +107,8 @@ class CausalGraph(DiffImbalance):
             variables (list, jnp.array(int)): array of the coordinates used to build the distance space (with weights 1)
             num_samples (int): number of samples harvested from the full time series
             time_lags (list(int), np.array(int)): tested time lags between 'present' and 'future'
-            embedding_dim (int): dimension of the time-delay embedding vector built on each variable, both
-                in the present space and in the target one. Default is 1, which means the time-delay embeddings 
-                are not employed.
+            embedding_dim (int): dimension of the time-delay embedding vector built on each variable. Default is 1, 
+                which means the time-delay embeddings are not employed.
             embedding_time (int): lag between consecutive samples in the time-delay embedding vectors of each
                 variable. Default is 1.
             discard_close_ind (int): defines the "close points" for which distances and ranks are not computed: for each point i, 
@@ -137,7 +137,7 @@ class CausalGraph(DiffImbalance):
             data_B=coords_present[:,variables].reshape((num_samples, len(variables) * embedding_dim)), # dummy argument
             discard_close_ind=discard_close_ind
         )
-        nn_indices = dii._return_nn_indices()#variables=variables)
+        nn_indices = dii._return_nn_indices() #variables=variables)
         return np.array(nn_indices)
 
     def optimize_present_to_future(
@@ -148,8 +148,11 @@ class CausalGraph(DiffImbalance):
         embedding_dim_future=1,
         embedding_time=1,
         target_variables="all",
+        save_weights=False,
+        dii_threshold=0.8,
         num_epochs=100,
         batches_per_epoch=1,
+        batches_method="all_columns",
         l1_strength=0.0,
         point_adapt_lambda=False,
         k_init=1,
@@ -163,7 +166,7 @@ class CausalGraph(DiffImbalance):
         compute_error=False,
         ratio_rows_columns=1,
         num_points_rows=None,
-        discard_close_ind=None
+        discard_close_ind=None,
     ):
         """Iteratively optimizes the DII from the full space in the present to a target space in the future.
     
@@ -171,9 +174,10 @@ class CausalGraph(DiffImbalance):
             num_samples (int): number of samples harvested from the full time series, interpreted as
                 independent initial conditions of the same dynamical process
             time_lags (list(int), np.ndarray(int)): tested time lags between 'present' and 'future'
-            embedding_dim (int): dimension of the time-delay embedding vector built on each variable, both
-                in the present space and in the target one. Default is 1, which means the time-delay embeddings 
-                are not employed.
+            embedding_dim_present (int): dimension of the time-delay embedding vectors built in the optimized 
+                space (t=0, t=-1, ...). Default is 1, which means the time-delay embeddings are not employed.
+            embedding_dim_future (int): dimension of the time-delay embedding vectors built in the space of 
+                the target variable (t=tau, t=tau-1, ...). Default is 1.
             embedding_time (int): lag between consecutive samples in the time-delay embedding vectors of each
                 variable.  Default is 1.
             target_variables (str or list(int), np.array(int)): list or np.array of the target variables
@@ -183,6 +187,7 @@ class CausalGraph(DiffImbalance):
             batches_per_epoch (int): number of minibatches; must be a divisor of n_points. Each update of the weights is
                 carried out by computing the gradient over n_points / batches_per_epoch points. The default is 1, which
                 means that the gradient is computed over all the available points (batch GD).
+            batches_method (str): method for minibatch implementation (either 'all_columns' or 'sample_columns')
             l1_strength (float): strength of the L1 regularization (LASSO) term. The default is 0.
             point_adapt_lambda (bool): whether to use a global smoothing parameter lambda for the c_ij coefficients
                 in the DII (if False), or a different parameter for each point (if True). The default is False.
@@ -215,6 +220,9 @@ class CausalGraph(DiffImbalance):
                 d[i,i-discard_close_ind:i+discard_close_ind+1] are discarded. This option is only available with
                 batches_per_epoch=1, compute_error=False and num_points_rows=None. The default is None, for which no 
                 "close points" are discarded.
+            save_weights (bool): whether to save or not the weights during each training. If True, weights are saved
+                in the argument 'weights_training' of the CausalGraph object, which is an array of shape 
+                (n_target_variables, n_time_lags, num_epochs+1, num_variables).
 
         Returns:
             weights_final (np.array(float)): array of shape (n_target_variables,n_time_lags,D) containing the
@@ -254,7 +262,14 @@ class CausalGraph(DiffImbalance):
             target_variables = np.arange(self.num_variables)
 
         imbs_training = np.zeros((len(target_variables),len(time_lags),num_epochs+1))
-        weights_final = np.zeros((len(target_variables),len(time_lags),self.num_variables)) # only final weights saved; may be modified
+        if embedding_dim_present == 1:
+            weights_final = np.zeros((len(target_variables),len(time_lags),self.num_variables))
+            if save_weights is True:
+                weights_training = np.zeros((len(target_variables),len(time_lags),num_epochs+1,self.num_variables))
+        elif embedding_dim_present > 1:
+            weights_final = np.zeros((len(target_variables),len(time_lags),self.num_variables,embedding_dim_present))
+            if save_weights is True: 
+                weights_training = np.zeros((len(target_variables),len(time_lags),num_epochs+1,self.num_variables,embedding_dim_present))
         imbs_final = np.zeros((len(target_variables),len(time_lags)))
         errors_final = np.zeros((len(target_variables),len(time_lags)))
         # loop over target variables and time lags
@@ -279,6 +294,7 @@ class CausalGraph(DiffImbalance):
                     seed=self.seed,
                     num_epochs=num_epochs,
                     batches_per_epoch=batches_per_epoch,
+                    batches_method=batches_method,
                     l1_strength=l1_strength,
                     point_adapt_lambda=point_adapt_lambda,
                     k_init=k_init,
@@ -294,17 +310,33 @@ class CausalGraph(DiffImbalance):
                     num_points_rows=num_points_rows,
                     discard_close_ind=discard_close_ind
                 )
-                weights_training, imbs_training[i_var,j_tau] = dii.train(bar_label=f"target_var={target_var}, tau={tau}")
+                weights_temp, imbs_training[i_var,j_tau] = dii.train(bar_label=f"target_var={target_var}, tau={tau}")
                 # save final weights
-                weights_final_temp = weights_training[-1].reshape((self.num_variables, embedding_dim))
-                weights_final_temp = np.max(weights_final_temp, axis=1) # for each variable take only largest weight over embedding components
-                weights_final[i_var,j_tau] = weights_final_temp
+                #weights_final_temp = weights_temp[-1].reshape((self.num_variables, embedding_dim_present))
+                #weights_final_temp = np.max(weights_final_temp, axis=1) # for each variable take only largest weight over embedding components
+                #weights_final[i_var,j_tau] = weights_final_temp
                 # save final imbalance (on the full dataset) and its error
                 imbs_final[i_var,j_tau] = dii.imb_final
                 errors_final[i_var,j_tau] = dii.error_final
+
+                # save weights
+                if embedding_dim_present == 1:
+                    weights_final[i_var,j_tau] = weights_temp[-1].reshape((self.num_variables))
+                    if save_weights is True: 
+                        weights_training[i_var,j_tau] = weights_temp.reshape((num_epochs+1, self.num_variables))
+                elif embedding_dim_present > 1:
+                    weights_final[i_var,j_tau] = weights_temp[-1].reshape((self.num_variables, embedding_dim_present))
+                    if save_weights is True:
+                        weights_training[i_var,j_tau] = weights_temp.reshape((num_epochs+1, self.num_variables, embedding_dim_present))
+                
+
+                if imbs_final[i_var,j_tau] > dii_threshold:
+                    print(f"The final DII is {imbs_final[i_var,j_tau]:2f}. Discard this and larger time lags for reliable results.")
         
         self.weights_final = weights_final
         self.imbs_training = imbs_training
+        if save_weights:
+            self.weights_training = weights_training
         self.imbs_final = imbs_final
         self.errors_final = errors_final
         return weights_final, imbs_training, imbs_final, errors_final

@@ -166,7 +166,7 @@ class DiffImbalance:
         seed=0,
         num_epochs=100,
         batches_per_epoch=1,
-        batches_method='all',
+        batches_method='all_columns',
         l1_strength=0.0,
         point_adapt_lambda=False,
         k_init=1,
@@ -210,7 +210,7 @@ class DiffImbalance:
                 subkey, jnp.arange(data_A.shape[0]), shape=(nrows,), replace=False
             )
             indices_columns = jnp.delete(jnp.arange(data_A.shape[0]), indices_rows)
-            self.max_rank = indices_columns.shape[0]  # for correct normalization
+            #self.max_rank = indices_columns.shape[0]  # for correct normalization
         elif num_points_rows is not None:
             assert (
                 discard_close_ind is None
@@ -224,11 +224,11 @@ class DiffImbalance:
             )
             indices_columns = jnp.delete(jnp.arange(data_A.shape[0]), indices_rows)
             indices_columns = jnp.concatenate((indices_rows, indices_columns))
-            self.max_rank = indices_columns.shape[0] - 1  # for correct normalization
+            #self.max_rank = indices_columns.shape[0] - 1  # for correct normalization
         else:
             indices_rows = jnp.arange(data_A.shape[0])
             indices_columns = +indices_rows
-            self.max_rank = indices_columns.shape[0] - 1  # for correct normalization
+            #self.max_rank = indices_columns.shape[0] - 1  # for correct normalization
         self.data_A_rows = data_A[indices_rows]
         self.data_A_columns = data_A[indices_columns]
         self.data_B_rows = data_B[indices_rows]
@@ -249,6 +249,8 @@ class DiffImbalance:
         self.num_epochs = num_epochs
         self.batches_per_epoch = batches_per_epoch
         self.batches_method = batches_method
+        #if self.batches_method == 'sample_columns':
+        #    self.max_rank = self.max_rank // batches_per_epoch
         self.l1_strength = l1_strength
         self.k_init = k_init
         self.k_final = k_final
@@ -293,10 +295,10 @@ class DiffImbalance:
             mask = mask.at[:discard_close_ind].set(first_rows)
             mask = mask.at[-discard_close_ind:].set(last_rows)
             self.mask = mask
-            self.max_rank -= 2 * self.discard_close_ind
+            #self.max_rank -= 2 * self.discard_close_ind
 
         # for efficiency reasons, faster sort in adaptive-lambda scheme
-        self.k_max_allowed = 100 if self.max_rank > 100 else self.max_rank
+        #self.k_max_allowed = 100 if self.max_rank > 100 else self.max_rank
 
         self.state = None
         self._distance_A = _compute_dist2_matrix_scaling  # TODO: assign other functions if other distances A are chosen
@@ -311,8 +313,8 @@ class DiffImbalance:
                 discard_close_ind is None
             ), f"Error: option discard_close_ind is not yet compatible with batches_per_epoch > 1"
             assert (
-                batches_method == 'all' or batches_method == 'sample_columns'
-            ), f"Error: option batches_method can be either 'all' or 'sample_columns'"
+                batches_method == 'all_columns' or batches_method == 'sample_columns'
+            ), f"Error: option batches_method can be either 'all_columns' or 'sample_columns'"
         if point_adapt_lambda:
             assert self.k_init is not None and self.k_final is not None, (
                 f"Error: provide values of 'k_init' and 'k_final' "
@@ -420,7 +422,10 @@ class DiffImbalance:
                 )
             ).astype(int)
             # take the k_max_allowed smallest distances with negative sign
-            smallest_dist2, _ = jax.lax.top_k(-dist2_matrix, self.k_max_allowed)
+            k_max_allowed = 100
+            if dist2_matrix.shape[1] < k_max_allowed:
+                k_max_allowed = dist2_matrix.shape[1]
+            smallest_dist2, _ = jax.lax.top_k(-dist2_matrix, k_max_allowed)#self.k_max_allowed)
             current_lambdas = -smallest_dist2[:, current_k - 1] * self.lambda_factor
 
             # Adaptive scheme of cython code
@@ -491,18 +496,21 @@ class DiffImbalance:
                 periods=self.periods_A,
             )
             N = dist2_matrix_A.shape[0]
+            max_rank = dist2_matrix_A.shape[1]
             if (
                 not self.compute_error
             ):  # set distance of a point with itself to large number
                 dist2_matrix_A = dist2_matrix_A.at[jnp.arange(N), jnp.arange(N)].set(
                     +1e10
                 )
+                max_rank -= 1
             if (
                 self.mask is not None
             ):  # apply mask to column indices around the row index
                 dist2_matrix_A = dist2_matrix_A[self.mask].reshape(
                     (dist2_matrix_A.shape[0], -1)
                 )
+                max_rank = dist2_matrix_A.shape[1]
             lambdas = self.lambda_method(  # compute lambda values
                 dist2_matrix=dist2_matrix_A, step=step
             )
@@ -510,17 +518,17 @@ class DiffImbalance:
                 -dist2_matrix_A / lambdas[:, jnp.newaxis],
                 axis=1,  # jax.lax.stop_gradient(lambdas[:, jnp.newaxis]), axis=1 ##lambdas[:, jnp.newaxis],  axis=1 #
             )
-            # alternativde definition of c_ij coefficients (sigmoid instead of softmax)
+            # alternative definition of c_ij coefficients (sigmoid instead of softmax)
             # c_matrix = jax.nn.sigmoid(
             #    (lambdas[:, jnp.newaxis] - dist2_matrix_A)/(self.lambda_factor * lambdas[:, jnp.newaxis])
             # )
 
             # compute DII and error
             conditional_ranks = jnp.sum(batch_B_ranks * c_matrix, axis=1)
-            diff_imbalance = 2.0 / (self.max_rank + 1) * jnp.sum(conditional_ranks) / N
+            diff_imbalance = 2.0 / (max_rank + 1) * jnp.sum(conditional_ranks) / N
             error_imbalance = (
                 2.0
-                / (self.max_rank + 1)
+                / (max_rank + 1)
                 * jnp.std(conditional_ranks, ddof=1)
                 / jnp.sqrt(N)
             )
@@ -582,21 +590,21 @@ class DiffImbalance:
                 current_lr = self.lr_schedule(state.step)
 
                 # (GD clipping, B. Carpenter et al, 2008)
-                # state = state.replace(jnp.where(state.params > 0, 1.0, 0.0)
-                #        * jnp.maximum(0, state.params - current_lr * self.l1_strength)
-                #        + jnp.where(state.params < 0, 1.0, 0.0)
-                #        * jnp.minimum(0, state.params + current_lr * self.l1_strength)
-                # )
+                state = state.replace(params=jnp.where(state.params > 0, 1.0, 0.0)
+                       * jnp.maximum(0, state.params - current_lr * self.l1_strength)
+                       + jnp.where(state.params < 0, 1.0, 0.0)
+                       * jnp.minimum(0, state.params + current_lr * self.l1_strength)
+                )
 
                 # (Soft version of GD clipping)
-                candidate_params = (
-                    state.params
-                    - jnp.sign(state.params) * current_lr * self.l1_strength
-                )
-                state = state.replace(
-                    params=state.params
-                    * (1.0 - jnp.where(state.params * candidate_params < 0, 1.0, 0.0))
-                )
+                #candidate_params = (
+                #    state.params
+                #    - jnp.sign(state.params) * current_lr * self.l1_strength
+                #)
+                #state = state.replace(
+                #    params=state.params
+                #    * (1.0 - jnp.where(state.params * candidate_params < 0, 1.0, 0.0))
+                #)
 
                 # scale weight vector to original norm
                 norm_now = jnp.sqrt((state.params**2).sum())
@@ -658,13 +666,23 @@ class DiffImbalance:
         params_training = jnp.empty(shape=(self.num_epochs + 1, self.nfeatures_A))
         imbs_training = jnp.empty(shape=(self.num_epochs + 1,))
         batch_indices = jnp.arange(self.nrows // self.batches_per_epoch)
-        imb_start, _ = self._compute_diff_imbalance(
-            self.init_params,
-            self.data_A_rows[batch_indices],
-            self.data_A_columns,
-            self.ranks_B[batch_indices],
-            0,
-        )
+
+        if self.batches_method == 'all_columns':
+            imb_start, _ = self._compute_diff_imbalance(
+                self.init_params,
+                self.data_A_rows[batch_indices],
+                self.data_A_columns,
+                self.ranks_B[batch_indices],
+                0,
+            )
+        elif self.batches_method == 'sample_columns':
+            imb_start, _ = self._compute_diff_imbalance(
+                self.init_params,
+                self.data_A_rows[batch_indices],
+                self.data_A_columns[batch_indices],
+                self.ranks_B[batch_indices][:,batch_indices].argsort().argsort(),
+                0,
+            )
         params_training = params_training.at[0].set(jnp.abs(self.init_params))
         imbs_training = imbs_training.at[0].set(imb_start)
 
@@ -729,7 +747,7 @@ class DiffImbalance:
                 jax.random.permutation(key, self.nrows), self.batches_per_epoch
             )
 
-            if self.batches_method == 'all':
+            if self.batches_method == 'all_columns':
                 # 1st method for mini-batch GD (only subsample rows)
                 for i_batch, batch_indices in enumerate(all_batch_indices):
                     ordered_column_indices = np.ravel(
@@ -747,7 +765,7 @@ class DiffImbalance:
             elif self.batches_method == 'sample_columns':
                 # 2nd method for mini-batch GD (subsample both rows and columns)
                 for batch_indices in all_batch_indices:
-                    self.state, imb, error = self._train_step(
+                    self.state, imb = self._train_step(
                         self.state,
                         self.data_A_rows[batch_indices],
                         self.data_A_columns[batch_indices],
