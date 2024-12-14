@@ -329,7 +329,6 @@ class CausalGraph(DiffImbalance):
                     if save_weights is True:
                         weights_training[i_var,j_tau] = weights_temp.reshape((num_epochs+1, self.num_variables, embedding_dim_present))
                 
-
                 if imbs_final[i_var,j_tau] > dii_threshold:
                     print(f"The final DII is {imbs_final[i_var,j_tau]:2f}. Discard this and larger time lags for reliable results.")
         
