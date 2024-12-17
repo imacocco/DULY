@@ -202,9 +202,9 @@ class DiffImbalance:
             assert (
                 num_points_rows is None
             ), f"Error: the option num_points_rows is not yet compatible with compute_error == True"
-            assert (
-                discard_close_ind is None
-            ), f"Error: the option discard_close_ind is not yet compatible with compute_error == True"
+            #assert (
+            #    discard_close_ind is None
+            #), f"Error: the option discard_close_ind is not yet compatible with compute_error == True"
             #nrows = int(0.5 * ratio_rows_columns * data_A.shape[0])
             #indices_rows = jax.random.choice(
             #    subkey, jnp.arange(data_A.shape[0]), shape=(nrows,), replace=False
@@ -273,29 +273,29 @@ class DiffImbalance:
         self.discard_close_ind = discard_close_ind
 
         # construct mask to discard distances d[i, i-discard_close_ind:i+discard_close_ind+1], for each i
-        self.mask = None
-        if self.discard_close_ind is not None:
-            mask = jnp.abs(
-                jnp.arange(self.nrows)[:, jnp.newaxis]
-                - jnp.arange(self.ncolumns)[jnp.newaxis, :]
-            )
-            mask = mask > discard_close_ind
-            # more columns than necessary discarded for starting and final rows, for shape compatibility
-            first_rows = jnp.concatenate(
-                (
-                    jnp.zeros(2 * discard_close_ind + 1),
-                    jnp.ones(self.ncolumns - 2 * discard_close_ind - 1),
-                )
-            )
-            last_rows = jnp.concatenate(
-                (
-                    jnp.ones(self.ncolumns - 2 * discard_close_ind - 1),
-                    jnp.zeros(2 * discard_close_ind + 1),
-                )
-            )
-            mask = mask.at[:discard_close_ind].set(first_rows)
-            mask = mask.at[-discard_close_ind:].set(last_rows)
-            self.mask = mask
+        #self.mask = None
+        #if self.discard_close_ind is not None:
+        #    mask = jnp.abs(
+        #        jnp.arange(self.nrows)[:, jnp.newaxis]
+        #        - jnp.arange(self.ncolumns)[jnp.newaxis, :]
+        #    )
+        #    mask = mask > discard_close_ind
+        #    # more columns than necessary discarded for starting and final rows, for shape compatibility
+        #    first_rows = jnp.concatenate(
+        #        (
+        #            jnp.zeros(2 * discard_close_ind + 1),
+        #            jnp.ones(self.ncolumns - 2 * discard_close_ind - 1),
+        #        )
+        #    )
+        #    last_rows = jnp.concatenate(
+        #        (
+        #            jnp.ones(self.ncolumns - 2 * discard_close_ind - 1),
+        #            jnp.zeros(2 * discard_close_ind + 1),
+        #        )
+        #    )
+        #    mask = mask.at[:discard_close_ind].set(first_rows)
+        #    mask = mask.at[-discard_close_ind:].set(last_rows)
+        #    self.mask = mask
             #self.max_rank -= 2 * self.discard_close_ind
 
         # for efficiency reasons, faster sort in adaptive-lambda scheme
@@ -310,9 +310,9 @@ class DiffImbalance:
             + f"from {self.nrows} samples."
         )
         if batches_per_epoch > 1:
-            assert (
-                discard_close_ind is None
-            ), f"Error: option discard_close_ind is not yet compatible with batches_per_epoch > 1"
+            #assert (
+            #    discard_close_ind is None
+            #), f"Error: option discard_close_ind is not yet compatible with batches_per_epoch > 1"
             assert (
                 batches_method == 'all_columns' or batches_method == 'sample_columns'
             ), f"Error: option batches_method can be either 'all_columns' or 'sample_columns'"
@@ -375,16 +375,16 @@ class DiffImbalance:
                     jnp.where(periods, 1.0, 0.0) * jnp.round(diffs / periods) * periods
                 )
             dist2_matrix = jnp.sum(diffs * diffs, axis=-1)
-            if self.mask is not None:
-                dist2_matrix = dist2_matrix[self.mask].reshape(
-                    (dist2_matrix.shape[0], -1)
-                )
+            #if self.mask is not None:
+            #    dist2_matrix = dist2_matrix[self.mask].reshape(
+            #        (dist2_matrix.shape[0], -1)
+            #    )
 
             rank_matrix = dist2_matrix.argsort(axis=1).argsort(axis=1)
             #if self.compute_error or # removed because +1 added by hand only for final imbalance calculation
                                       # (error scheme never applied during training)
-            if self.discard_close_ind is not None:
-                rank_matrix = rank_matrix + 1
+            #if self.discard_close_ind is not None:
+            #    rank_matrix = rank_matrix + 1
             return rank_matrix
 
         def _cosine_decay_func(start_value, final_value, step):
@@ -506,13 +506,13 @@ class DiffImbalance:
             dist2_matrix_A = dist2_matrix_A.at[jnp.arange(N), jnp.arange(N)].set(
                 +1e10
             )
-            if (
-                self.mask is not None
-            ):  # apply mask to column indices around the row index
-                dist2_matrix_A = dist2_matrix_A[self.mask].reshape(
-                    (dist2_matrix_A.shape[0], -1)
-                )
-                max_rank = dist2_matrix_A.shape[1]
+            #if (
+            #    self.mask is not None
+            #):  # apply mask to column indices around the row index
+            #    dist2_matrix_A = dist2_matrix_A[self.mask].reshape(
+            #        (dist2_matrix_A.shape[0], -1)
+            #    )
+            #    max_rank = dist2_matrix_A.shape[1]
             lambdas = self.lambda_method(  # compute lambda values
                 dist2_matrix=dist2_matrix_A, step=step
             )
@@ -671,10 +671,10 @@ class DiffImbalance:
                 periods=self.periods_A,
             )
             N = rank_matrix.shape[0]
-            if (
-                not self.discard_close_ind
-            ):  # discard distance rank of a point with itself
-                rank_matrix = rank_matrix.at[jnp.arange(N), jnp.arange(N)].set(N + 1)
+            #if (
+            #    self.discard_close_ind is None
+            #):  # discard distance rank of a point with itself
+            rank_matrix = rank_matrix.at[jnp.arange(N), jnp.arange(N)].set(N + 1)
             nn_indices = jnp.argmin(rank_matrix, axis=1)
             return nn_indices
 
@@ -864,21 +864,27 @@ class DiffImbalance:
         self.final_params = params_training[-1]
 
         # compute final imbalance and error (over full dataset) and store them
-        nrows = int(0.5 * self.ratio_rows_columns * self.data_A.shape[0])
+        data_A_subsampled = +self.data_A
+        data_B_subsampled = +self.data_B
+        if self.discard_close_ind is not None:
+            subsamples = jnp.arange(0, self.data_A.shape[0], self.discard_close_ind+1, dtype=int)
+            data_A_subsampled = data_A_subsampled[subsamples]
+            data_B_subsampled = data_B_subsampled[subsamples]
+        nrows = int(0.5 * self.ratio_rows_columns * data_A_subsampled.shape[0])
         self.key, subkey = jax.random.split(self.key, num=2)
         indices_rows = jax.random.choice(
-            subkey, jnp.arange(self.data_A.shape[0]), shape=(nrows,), replace=False
+            subkey, jnp.arange(data_A_subsampled.shape[0]), shape=(nrows,), replace=False
         )
-        indices_columns = jnp.delete(jnp.arange(self.data_A.shape[0]), indices_rows)
+        indices_columns = jnp.delete(jnp.arange(data_A_subsampled.shape[0]), indices_rows)
         ranks_B = self._compute_rank_matrix(
-            batch_rows=self.data_B[indices_rows],
-            batch_columns=self.data_B[indices_columns],
+            batch_rows=data_B_subsampled[indices_rows],
+            batch_columns=data_B_subsampled[indices_columns],
             periods=self.periods_B,
         )
         imb_final, error_final = self._compute_diff_imbalance_and_error(
             self.final_params,
-            self.data_A[indices_rows],
-            self.data_A_columns[indices_columns],
+            data_A_subsampled[indices_rows],
+            data_A_subsampled[indices_columns],
             ranks_B+1,
             self.state.step,
         )

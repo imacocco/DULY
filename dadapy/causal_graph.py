@@ -321,7 +321,7 @@ class CausalGraph(DiffImbalance):
 
                 # save weights
                 if embedding_dim_present == 1:
-                    weights_final[i_var,j_tau] = weights_temp[-1].reshape((self.num_variables))
+                    weights_final[i_var,j_tau] = weights_temp[-1]#.reshape((self.num_variables))
                     if save_weights is True: 
                         weights_training[i_var,j_tau] = weights_temp.reshape((num_epochs+1, self.num_variables))
                 elif embedding_dim_present > 1:
