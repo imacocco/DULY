@@ -362,7 +362,6 @@ class DensityAdvanced(DensityEstimation, NeighGraph):
         self,
         delta_F_inv_cov="uncorr",
         comp_log_den_err=False,
-        mem_efficient=False,
         alpha=1,
         log_den=None,
         log_den_err=None,
@@ -384,8 +383,6 @@ class DensityAdvanced(DensityEstimation, NeighGraph):
                         finding the approximate diagonal inverse which multiplied by C gives the least-squares closest
                         matrix to the identity in the Frobenius norm
             comp_log_den_err (bool): if True, compute the error on the BMTI estimates. Can be highly time consuming
-            mem_efficient (bool): if True, use a sparse matrice to solve BMTI linear system (slower). If False, use a
-                dense NxN matrix; this is faster, but can require a great amount of memory if the system is large.
             alpha (float): can take values from 0.0 to 1.0. Indicates the portion of BMTI in the sum of the likelihoods
                 alpha*L_BMTI + (1-alpha)*L_kstarNN. Setting alpha=1.0 corresponds to not reguarising BMTI.
             log_den (np.ndarray(float)): size N. The array of the log-densities of the regulariser.
@@ -415,13 +412,6 @@ class DensityAdvanced(DensityEstimation, NeighGraph):
             self.log_den = log_den
             self.log_den_err = log_den_err
 
-        # add a warnings.warning if self.N > 10000 and mem_efficient is False
-        if self.N > 15000 and mem_efficient is False:
-            warnings.warn(
-                "The number of points is large and the memory efficient option is not selected. \
-                If you run into memory issues, consider using the slower memory efficient option."
-            )
-
         if self.verb:
             print("BMTI density estimation started")
             sec = time.time()
@@ -432,14 +422,16 @@ class DensityAdvanced(DensityEstimation, NeighGraph):
         sec2 = time.time()
 
         if self.verb:
-            print("{0:0.2f} seconds to fill get linear system ready".format(sec2 - sec))
+            print("{0:0.2f} seconds to get the linear system ready".format(sec2 - sec))
 
         # solve linear system
-        log_den = self._solve_BMTI_reg_linar_system(A, deltaFcum, mem_efficient)
+        log_den = self._solve_BMTI_reg_linar_system(A, deltaFcum)
         self.log_den = log_den
 
         if self.verb:
-            print("{0:0.2f} seconds to solve linear system".format(time.time() - sec2))
+            print(
+                "{0:0.2f} seconds to solve the linear system".format(time.time() - sec2)
+            )
         sec2 = time.time()
 
         # compute error
@@ -529,10 +521,6 @@ class DensityAdvanced(DensityEstimation, NeighGraph):
 
         return A, deltaFcum
 
-    def _solve_BMTI_reg_linar_system(self, A, deltaFcum, mem_efficient):
-        if mem_efficient is False:
-            log_den = np.linalg.solve(A.todense(), deltaFcum)
-        else:
-            log_den = sparse.linalg.spsolve(A.tocsr(), deltaFcum)
-
+    def _solve_BMTI_reg_linar_system(self, A, deltaFcum):
+        log_den = sparse.linalg.cg(A, deltaFcum, atol=0.0, maxiter=None)[0]
         return log_den
